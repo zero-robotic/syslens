@@ -1,0 +1,77 @@
+syntax = "proto3";
+package syslens.v1;
+import "google/protobuf/timestamp.proto";
+
+// Preserve field numbers; reserve numbers and names when removing fields.
+message InputStatus {
+  string collector = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  optional string error = 3;
+}
+message Header {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 batch_id = 2;
+  string host = 3;
+  string boot_id = 4;
+  repeated InputStatus inputs = 5;
+}
+message CpuCore {
+  uint32 core_id = 1;
+  optional double usage_percent = 2;
+}
+message Cpu {
+  // System/core percent is 0..100; iowait is treated as idle.
+  optional double usage_percent = 1;
+  repeated CpuCore cores = 2;
+}
+message Memory {
+  uint64 total_bytes = 1;
+  uint64 available_bytes = 2;
+  uint64 used_bytes = 3; // MemTotal - MemAvailable, not GPU-only allocation.
+  uint64 swap_total_bytes = 4;
+  uint64 swap_used_bytes = 5;
+}
+message SystemSample {
+  Header header = 1;
+  Cpu cpu = 2;
+  Memory memory = 3;
+}
+message Thread {
+  uint32 tid = 1;
+  uint64 start_ticks = 2;
+  string instance_id = 3;
+  string name = 4;
+  // One fully occupied logical CPU = 100%. Absent until a baseline exists.
+  optional double cpu_percent = 5;
+  uint64 cpu_time_ticks = 6;
+}
+message Process {
+  uint32 pid = 1;
+  uint64 start_ticks = 2;
+  string instance_id = 3;
+  string name = 4;
+  // May exceed 100% when multiple threads execute concurrently.
+  optional double cpu_percent = 5;
+  uint64 rss_bytes = 6;
+  uint64 virtual_bytes = 7;
+  uint64 cpu_time_ticks = 8;
+  repeated Thread threads = 9;
+  optional string threads_error = 10;
+}
+message ProcessSample {
+  Header header = 1;
+  repeated Process processes = 2;
+  uint32 skipped_processes = 3;
+}
+message GpuSample {
+  Header header = 1;
+  string device = 2;
+  optional double utilization_percent = 3;
+  string source = 4;
+  // Jetson shares system RAM. This message describes that pool, not GPU-only usage.
+  Memory shared_system_memory = 5;
+  optional uint64 dedicated_memory_total_bytes = 6;
+  optional uint64 dedicated_memory_used_bytes = 7;
+  string memory_scope = 8;
+  google.protobuf.Timestamp source_timestamp = 9;
+}

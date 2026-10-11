@@ -1,0 +1,35 @@
+# Loaded by default, relative to the working directory. CLI options override this file.
+interval_ms = 1000
+# samples = 60 # Omit for continuous collection.
+proc_root = "/proc"
+
+[processes]
+enabled = true
+threads = true
+# Empty selectors mean all visible processes. Names match /proc/PID/stat comm exactly.
+# PID and name selectors are combined with OR.
+pids = []
+names = []
+
+[gpu]
+enabled = true
+sys_root = "/sys"
+# NVIDIA Jetson: automatically find the GPU load sysfs node, otherwise use tegrastats.
+# load_path = "/sys/devices/gpu.0/load"
+tegrastats = "tegrastats"
+timeout_ms = 1500
+
+[recording]
+enabled = true
+directory = "recordings"
+queue_capacity = 128
+rotate_seconds = 300
+# Uncompressed message payload budget, not exact file size. Rotation is between messages.
+rotate_payload_bytes = 67108864
+flush_ms = 1000
+
+[foxglove]
+enabled = true
+bind = "127.0.0.1"
+port = 8765
+queue_capacity = 128
