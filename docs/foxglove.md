@@ -1,6 +1,6 @@
 # Foxglove 曲线布局
 
-导入 [config/foxglove/syslens.json](../config/foxglove/syslens.json) 即可使用预设曲线。布局包含 8 个标签页、17 个 Plot 面板、两个原始消息面板和使用说明；数据来自 `/syslens/system` 与 `/syslens/processes`。
+导入 [config/foxglove/syslens.json](../config/foxglove/syslens.json) 即可使用预设曲线。布局包含 6 个标签页、17 个 Plot 面板、两个原始消息面板和使用说明；数据来自 `/syslens/system` 与 `/syslens/processes`。
 
 ## 连接与导入
 
@@ -15,16 +15,26 @@
 
 | 标签页 | 曲线 |
 | --- | --- |
-| 系统 CPU / 内存 | 系统 CPU、每个逻辑核 CPU；内存总量 / 已用 / 可用；Swap 总量 / 已用。 |
-| 系统 GPU | GPU 利用率、驱动统计的 GPU 内存已用 / 总量。 |
-| 进程 CPU / 内存 | 各进程 CPU、RSS、虚拟内存；进程 CPU 扫描的跳过数。 |
+| 系统统计数据 | 系统 CPU、每个逻辑核 CPU；内存总量 / 已用 / 可用；Swap 总量 / 已用；GPU 利用率、驱动统计的 GPU 内存已用 / 总量。 |
+| 进程统计数据 | 各进程 CPU、RSS、虚拟内存；进程 CPU 扫描的跳过数；各进程 GPU 利用率与 GPU 内存占用。 |
 | 线程 CPU | 各线程 CPU，区分所属进程和线程实例。 |
-| 进程 GPU | 各进程 GPU 利用率与 GPU 内存占用。 |
 | 采集状态 | 各输入实际采集间隔、采集耗时、输入年龄、累计错过周期。 |
 | 原始消息 | 系统 / 进程原始消息，用于查看来源、错误、instance_id 和 memory_scope。 |
 | 使用说明 | 连接、筛选、单位和缺失值说明。 |
 
+“系统统计数据”采用两列三行布局，依次展示 CPU、内存 / Swap、GPU 的六个图表。
+
+“进程统计数据”同样采用两列三行布局，依次展示 CPU / RSS、虚拟内存 / 扫描跳过数、GPU 利用率 / GPU 内存的六个图表，支持通过 `pid` 筛选进程曲线。
+
 内存使用 MiB（1 MiB = 1,048,576 字节）。进程 CPU 占满一个逻辑核为 100%，多线程可超过 100%，对应图的纵轴不固定为 100%。GPU 内存沿用驱动统计口径，不能与系统 RAM 或 RSS 直接相加。
+
+## 图例显示开关
+
+每个图表的曲线名称与数值列表称为**图例（Legend）**。预设布局的 17 个 Plot 面板默认隐藏图例，让曲线区域使用完整宽度；隐藏图例不会关闭曲线或停止订阅。
+
+需要查看列表时，可点击该图表工具栏的 **Toggle legend / 切换图例** 按钮，也可打开齿轮设置，在 **Legend → Show legend** 中开启或关闭。开关对每个面板独立生效；开启后仍使用左侧图例并显示数值。若希望图例显示在图内，可将 **Position** 改为 **Floating**。[官方图例设置与工具栏说明](https://docs.foxglove.dev/docs/visualization/panels/plot#legend)
+
+已经导入的布局不会随仓库文件更新而自动改变。可以直接在现有图表中关闭图例，或重新导入更新后的 `config/foxglove/syslens.json`；希望保留面板调整时请保存布局。
 
 ## 进程与线程筛选
 

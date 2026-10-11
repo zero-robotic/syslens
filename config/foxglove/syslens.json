@@ -19,7 +19,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -50,7 +50,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -100,7 +100,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -139,7 +139,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -168,7 +168,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -208,7 +208,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -238,7 +238,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -268,7 +268,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -298,7 +298,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -327,7 +327,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -335,36 +335,6 @@
       "showYAxisLabels": true,
       "showYAxisGridLines": true,
       "yAxisLabel": "个",
-      "minYValue": 0
-    },
-    "Plot!syslens-threads": {
-      "foxglovePanelTitle": "各线程 CPU（pid / tid 可筛选）",
-      "paths": [
-        {
-          "value": "/foxglove_script/syslens/process_curves.thread_cpu[:]",
-          "enabled": true,
-          "timestampMethod": "receiveTime",
-          "showLine": true,
-          "lineSize": 1.5,
-          "label": "各线程 CPU（pid / tid 可筛选）",
-          "dynamicLabelField": "label",
-          "dynamicValueField": "value",
-          "id": "threads-0"
-        }
-      ],
-      "xAxisVal": "timestamp",
-      "timeWindowMode": "sliding",
-      "followingViewWidth": 60,
-      "playbackBarPosition": "right",
-      "isSynced": true,
-      "showLegend": true,
-      "showPlotValuesInLegend": true,
-      "legendDisplay": "left",
-      "sidebarDimension": 220,
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "showYAxisGridLines": true,
-      "yAxisLabel": "%",
       "minYValue": 0
     },
     "Plot!syslens-process-gpu": {
@@ -387,7 +357,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -418,7 +388,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -426,6 +396,36 @@
       "showYAxisLabels": true,
       "showYAxisGridLines": true,
       "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-threads": {
+      "foxglovePanelTitle": "各线程 CPU（pid / tid 可筛选）",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.thread_cpu[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各线程 CPU（pid / tid 可筛选）",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "threads-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": false,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
       "minYValue": 0
     },
     "Plot!syslens-actual_interval_ms": {
@@ -459,7 +459,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -500,7 +500,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -541,7 +541,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -582,7 +582,7 @@
       "followingViewWidth": 60,
       "playbackBarPosition": "right",
       "isSynced": true,
-      "showLegend": true,
+      "showLegend": false,
       "showPlotValuesInLegend": true,
       "legendDisplay": "left",
       "sidebarDimension": 220,
@@ -602,13 +602,13 @@
     },
     "Markdown!syslens-help": {
       "foxglovePanelTitle": "Syslens 使用说明",
-      "markdown": "# Syslens 监控曲线\n\n连接采集主机的 Foxglove WebSocket（默认端口 8765），或打开 Syslens 的 MCAP 文件。布局不会自动连接主机。\n\n- 右侧 Variables / 变量（按 ] 打开）：`pid = 0` 显示全部进程，改成目标 PID 可筛选所有进程和线程曲线。`tid = 0` 显示全部线程，非零时筛选线程。数值请保持为整数。\n- 每条进程 / 线程曲线按完整 instance_id 区分，名称相同或 PID 复用不会混线。\n- 每个动态序列最多显示 100 个实体；大量进程 / 线程时先设置 pid，或在采集端按 PID / 名称筛选。\n- 内存单位为 MiB（1024² 字节）；进程 CPU 可超过 100%。\n- GPU 不支持、CPU 缺少差分基线、输入失败或过期时会缺少曲线；不会将缺失值补成 0。原始消息页可查看 header.inputs 和 GPU error / memory_scope。\n- 默认显示最近 60 秒。回放全程时将 Plot 的 Time window 改为 Automatic。\n- 实时显示会复用尚未过期的指标，且 Foxglove 输出会按 Topic 合并消息；精确分析单一来源的原始观测请使用 MCAP 并按 header.trigger_input 筛选。\n\n需要支持 Plot 动态子序列和布局内 User Scripts 的 Foxglove 客户端；开发核对版本为 3.3.0。\n"
+      "markdown": "# Syslens 监控曲线\n\n连接采集主机的 Foxglove WebSocket（默认端口 8765），或打开 Syslens 的 MCAP 文件。布局不会自动连接主机。\n\n- 右侧 Variables / 变量（按 ] 打开）：`pid = 0` 显示全部进程，改成目标 PID 可筛选所有进程和线程曲线。`tid = 0` 显示全部线程，非零时筛选线程。数值请保持为整数。\n- 所有图表默认隐藏图例列表。点击各图工具栏的 Toggle legend / 切换图例，或在齿轮设置的 Legend → Show legend 中单独开启或关闭。\n- 每条进程 / 线程曲线按完整 instance_id 区分，名称相同或 PID 复用不会混线。\n- 每个动态序列最多显示 100 个实体；大量进程 / 线程时先设置 pid，或在采集端按 PID / 名称筛选。\n- 内存单位为 MiB（1024² 字节）；进程 CPU 可超过 100%。\n- GPU 不支持、CPU 缺少差分基线、输入失败或过期时会缺少曲线；不会将缺失值补成 0。原始消息页可查看 header.inputs 和 GPU error / memory_scope。\n- 默认显示最近 60 秒。回放全程时将 Plot 的 Time window 改为 Automatic。\n- 实时显示会复用尚未过期的指标，且 Foxglove 输出会按 Topic 合并消息；精确分析单一来源的原始观测请使用 MCAP 并按 header.trigger_input 筛选。\n\n需要支持 Plot 动态子序列和布局内 User Scripts 的 Foxglove 客户端；开发核对版本为 3.3.0。\n"
     },
     "Tab!syslens": {
       "activeTabIdx": 0,
       "tabs": [
         {
-          "title": "系统 CPU / 内存",
+          "title": "系统统计数据",
           "layout": {
             "direction": "column",
             "first": {
@@ -618,25 +618,26 @@
               "splitPercentage": 50
             },
             "second": {
-              "direction": "row",
-              "first": "Plot!syslens-memory",
-              "second": "Plot!syslens-swap",
-              "splitPercentage": 50
+              "direction": "column",
+              "first": {
+                "direction": "row",
+                "first": "Plot!syslens-memory",
+                "second": "Plot!syslens-swap",
+                "splitPercentage": 50
+              },
+              "second": {
+                "direction": "row",
+                "first": "Plot!syslens-gpu",
+                "second": "Plot!syslens-gpu-memory",
+                "splitPercentage": 50
+              },
+              "splitPercentage": 50.0
             },
-            "splitPercentage": 50
+            "splitPercentage": 33.333333333333336
           }
         },
         {
-          "title": "系统 GPU",
-          "layout": {
-            "direction": "row",
-            "first": "Plot!syslens-gpu",
-            "second": "Plot!syslens-gpu-memory",
-            "splitPercentage": 50
-          }
-        },
-        {
-          "title": "进程 CPU / 内存",
+          "title": "进程统计数据",
           "layout": {
             "direction": "column",
             "first": {
@@ -646,26 +647,27 @@
               "splitPercentage": 50
             },
             "second": {
-              "direction": "row",
-              "first": "Plot!syslens-process-virtual",
-              "second": "Plot!syslens-skipped",
-              "splitPercentage": 50
+              "direction": "column",
+              "first": {
+                "direction": "row",
+                "first": "Plot!syslens-process-virtual",
+                "second": "Plot!syslens-skipped",
+                "splitPercentage": 50
+              },
+              "second": {
+                "direction": "row",
+                "first": "Plot!syslens-process-gpu",
+                "second": "Plot!syslens-process-gpu-memory",
+                "splitPercentage": 50
+              },
+              "splitPercentage": 50.0
             },
-            "splitPercentage": 50
+            "splitPercentage": 33.333333333333336
           }
         },
         {
           "title": "线程 CPU",
           "layout": "Plot!syslens-threads"
-        },
-        {
-          "title": "进程 GPU",
-          "layout": {
-            "direction": "row",
-            "first": "Plot!syslens-process-gpu",
-            "second": "Plot!syslens-process-gpu-memory",
-            "splitPercentage": 50
-          }
         },
         {
           "title": "采集状态",
@@ -683,7 +685,7 @@
               "second": "Plot!syslens-missed_periods",
               "splitPercentage": 50
             },
-            "splitPercentage": 50
+            "splitPercentage": 50.0
           }
         },
         {
