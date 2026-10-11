@@ -5,3 +5,6 @@ pub mod memory;
 pub mod process;
 mod procfs;
 pub mod threads;
+
+mod command;
+pub mod gpu_sources;

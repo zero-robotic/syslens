@@ -1,8 +1,18 @@
 # Loaded by default, relative to the working directory. CLI options override this file.
-# Message publication period; collectors use the independent periods below.
+# Live delivery interval per topic. MCAP preserves every assembled observation.
 interval_ms = 100
-# samples = 60 # Number of publication rounds. Omit for continuous collection.
+# samples = 60 # Run for 60 * interval_ms milliseconds, then drain. Omit to run continuously.
 proc_root = "/proc"
+
+[runtime]
+# Bounded FIFO before assembly. Full queues pause the producer, never overwrite observations.
+observation_queue_capacity = 1024
+# A producer unable to enqueue within this limit is disabled with an explicit error.
+enqueue_timeout_ms = 1000
+collection_timeout_ms = 5000
+# Total shutdown budget; half is reserved for output drain/finalization.
+shutdown_timeout_ms = 5000
+startup_timeout_ms = 15000
 
 [sampling]
 # All periods are milliseconds. Changes take effect after restarting syslens.
@@ -18,7 +28,7 @@ gpu_utilization_ms = 100
 gpu_memory_ms = 500
 # nvidia-smi pmon supports periods of at least 1000 ms.
 process_gpu_utilization_ms = 1000
-# Exclude inputs older than their period multiplied by this value.
+# Expire retained inputs after this many periods; always preserve the triggering observation.
 stale_after_periods = 3
 
 [processes]
@@ -47,6 +57,11 @@ timeout_ms = 1500
 enabled = true
 directory = "recordings"
 queue_capacity = 128
+# disable / drop_newest / drop_oldest. Disable stops recording on overload and drains accepted data.
+overflow = "disable"
+# isolate keeps other outputs running; stop terminates the run on output failure.
+on_failure = "isolate"
+operation_timeout_ms = 5000
 rotate_seconds = 300
 # Uncompressed message payload budget, not exact file size. Rotation is between messages.
 rotate_payload_bytes = 67108864
@@ -57,3 +72,7 @@ enabled = true
 bind = "127.0.0.1"
 port = 8765
 queue_capacity = 128
+# Latest values are coalesced per topic before sending at interval_ms.
+overflow = "drop_oldest"
+on_failure = "isolate"
+operation_timeout_ms = 5000

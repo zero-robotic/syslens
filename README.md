@@ -11,13 +11,13 @@ Rust 编写的 Linux 进程与系统监控程序，面向 NVIDIA Jetson Orin、T
 ```sh
 cargo build --release --locked
 
-# 默认加载 config/syslens.toml，按各指标独立周期采集，每 100 ms 发布消息。
+# 默认加载 config/syslens.toml，按各指标独立周期采集，实时曲线每个 Topic 最多每 100 ms 更新一次。
 ./target/release/syslens
 
 # 监控指定进程，允许其他主机连接实时数据。
 ./target/release/syslens --pid 1234,5678 --bind 0.0.0.0
 
-# 普通 Linux 主机：禁用 Jetson GPU，只录制 60 个发布批次。
+# 普通 Linux 主机：禁用 Jetson GPU，录制约 6 秒，保存期间所有已组装观测。
 ./target/release/syslens --no-gpu --no-live --samples 60 --output-dir recordings
 
 # 指定其他配置文件；命令行参数覆盖对应配置项。
@@ -35,22 +35,23 @@ cargo build --release --locked
 | --- | ---: | --- |
 | `system_cpu_ms` | 100 | 系统总 CPU 和各逻辑核 CPU，共享一次 `/proc/stat` 读取。 |
 | `system_memory_ms` | 200 | 系统内存、swap。 |
-| `process_cpu_ms` | 100 | 进程列表和进程 CPU。 |
-| `process_memory_ms` | 200 | 进程 RSS、虚拟内存，按 PID 和启动 tick 与进程 CPU 结果关联。 |
+| `process_cpu_ms` | 100 | 进程 CPU；其他进程指标独立发现实体。 |
+| `process_memory_ms` | 200 | 进程 RSS、虚拟内存及该来源观察到的进程身份。 |
 | `thread_cpu_ms` | 100 | 进程内各线程 CPU。 |
 | `gpu_utilization_ms` | 100 | 系统 GPU 利用率；也控制 tegrastats 的输出间隔。 |
 | `gpu_memory_ms` | 500 | 系统及进程 GPU 内存，共享驱动内存快照。 |
 | `process_gpu_utilization_ms` | 1000 | 进程 GPU 利用率；pmon 限制至少 1000 ms。 |
 | `stale_after_periods` | 3 | 输入超过自身采集周期的此倍数后过期，组装时不使用。 |
 
-顶层 `interval_ms = 100` 是**消息发布周期**，`--interval-ms` 只覆盖发布周期，不改变各采集器周期。`--samples` 是发布批次数，首批在一个发布周期后输出，不等待慢采集器完成。采集周期和发布周期允许 1 ms 至 24 小时；这些是目标间隔，实际速度受系统负载和驱动接口约束。缩短采集周期时，应同步缩短发布周期以减少中间样本被覆盖，并观察下述 `skipped_samples`。
+顶层 `interval_ms = 100` 现在是 **Foxglove 每个 Topic 的实时发送间隔**，不限制组装或录制频率。`--interval-ms` 只覆盖该值。`--samples N` 保留为有界运行选项，运行时长为 `N × interval_ms` 毫秒，随后排空队列；它不再表示消息条数。首个观测完成即可组装，不等待其他来源就绪。
 
-例如，排查指定进程时可以设置 `process_cpu_ms = 50`、`thread_cpu_ms = 50`，同时设置顶层 `interval_ms = 25`。高频扫描全部进程与线程会增加开销，建议通过 PID/名称限定目标，并在 Orin/Thor 实机测量采集耗时。配置修改后重启生效。
+例如，`process_cpu_ms = 20`、`thread_cpu_ms = 20`、`interval_ms = 100` 会将每次进程/线程观测写入 MCAP，实时端每个 Topic 最多每 100 ms 发送最新消息。缩短采集周期不需要同步缩短实时发送间隔。高频扫描全部进程/线程仍有开销，应按 PID/名称限定目标，并在目标设备测量采集耗时。
 
+`[runtime]` 配置观测队列容量、入队等待上限、单次采集超时、启动探测预算及退出预算；启动探测也使用受监督任务，超出总预算则启动失败。`[recording]`、`[foxglove]` 各自配置队列容量、`overflow`、`on_failure` 和单次输出超时，默认值及说明见配置文件。
 
 PID 和进程名选择器按“或”匹配；名称精确匹配 `/proc/PID/stat` 的 `comm`。两个选择器都为空时监控所有可见进程。`--no-threads` 可关闭线程扫描；配置中 `processes.enabled = false` 可关闭进程及线程采集。
 
-默认监听 `127.0.0.1:8765`，录制写入 `recordings/`。按 Ctrl+C 或发送 SIGTERM 后，程序停止发布、唤醒并停止采集线程，等待正在执行的采集结束，排空输出队列并结束 MCAP 文件。录制与实时发送可分别关闭，但至少保留一个输出。
+默认监听 `127.0.0.1:8765`，录制写入 `recordings/`。按 Ctrl+C 或发送 SIGTERM 后，程序取消采集，继续处理已完成的观测，再排空输出队列并结束 MCAP 文件；退出受 `[runtime].shutdown_timeout_ms` 约束。录制与实时发送可分别关闭，但至少保留一个输出。
 
 ## Foxglove 实时曲线与回放
 
@@ -72,7 +73,11 @@ PID 和进程名选择器按“或”匹配；名称精确匹配 `/proc/PID/stat
 | PID 1234 的 GPU 利用率（接口支持时） | `/syslens/processes.processes[:]{pid==1234}.gpu.utilization_percent` |
 | PID 1234 的 GPU 内存统计 | `/syslens/processes.processes[:]{pid==1234}.gpu.memory_used_bytes` |
 
-每个发布批次默认发送两条消息：`SystemSample`（`/syslens/system`）与 `ProcessSample`（`/syslens/processes`，包含所有选中的进程）。关闭进程采集后只有系统消息。不再发布 `/syslens/gpu`；旧 `GpuSample` 定义保留为 deprecated，旧 MCAP 使用文件内的 schema 回放。已有 GPU 曲线路径需要改成上表路径。
+仍然只有两种消息：`SystemSample`（`/syslens/system`）和 `ProcessSample`（`/syslens/processes`）。每个观测只触发依赖它的组装器：例如 CPU 观测触发系统消息，线程观测触发进程消息，共享 GPU 内存观测可触发两者。消息数不再固定为每周期两条。实时输出按 Topic 合并待发消息，录制保留全部已组装消息。
+
+`header.trigger_input` 标明触发来源，`header.timestamp` 及 MCAP/Foxglove 时间戳使用该观测的采集开始时间。其他指标可复用未过期的输入，实际时间见 `header.inputs` 和 GPU 时间字段；回放分析某个输入的原始时间序列时按 `trigger_input` 筛选，避免把复用值当作新观测。不同来源并发采集，消息的采集时间不保证严格单调。
+
+关闭进程采集后只有系统消息。旧 `GpuSample` 定义保留为 deprecated，不再发布；旧 MCAP 使用文件内的 schema 回放。
 
 替换示例 PID/TID 后即可选择单个实体；长期跟踪可用 `instance_id` 筛选，避免 PID 复用把两个进程连成一条曲线。数组筛选语法见 [FoxQL](https://docs.foxglove.dev/docs/visualization/foxql)。
 
@@ -96,46 +101,47 @@ Jetson 与 CPU 共享物理 RAM。`SystemSample.memory` 保留系统 RAM 数据�
 
 两代平台使用相同消息结构，按实际接口能力选取来源。Orin 的 nvmap 节点必须有读取权限；可配置 `gpu.nvmap_clients_path`。nvmap 不可用时尝试 `gpu.nvidia_smi`，拒绝 Orin 的 `(nvgpu)` 占位设备。Thor 的系统显存和进程利用率是否可取取决于驱动/BSP，不能保证每个版本都有。[Orin 进程利用率限制](https://forums.developer.nvidia.com/t/how-to-check-gpu-usage-percentage-by-process-on-jetson/319750)、[nvidia-smi 查询说明](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
 
-GPU load 节点随平台与 JetPack 版本变化，可用 `gpu.load_path` 显式指定。未找到节点时，需让 `tegrastats` 在 PATH 内或配置其完整路径。解析支持单频率和 Orin/Thor 多 GPC 数组；只有频率而没有百分比时不生成利用率。[tegrastats 格式说明](https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html)
+GPU load 节点随平台与 JetPack 版本变化，可用 `gpu.load_path` 显式指定。节点不存在、不可读或无有效数据时继续尝试其他来源；需让 `tegrastats` 在 PATH 内或配置其完整路径。解析支持单频率和 Orin/Thor 多 GPC 数组；只有频率而没有百分比时不生成利用率。[tegrastats 格式说明](https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html)
 
-启动时分别探测系统利用率、内存统计与可用的进程接口。失败的来源只提示一次，本次运行不再尝试；部分来源失败不影响其他来源。显式报告所有活动进程值均为 N/A 的接口也会停用；空进程表本身不代表失败，允许后续新进程被采集。修复驱动、路径或权限后需要重启。`--no-gpu` 或 `gpu.enabled = false` 直接跳过全部 GPU 探测，消息中的 `gpu` 缺失；启用但不可用时保留空指标及 `utilization_error` / `memory_error`。
+GPU 来源选择集中在 `collectors::gpu_sources`；启动时分别探测系统利用率、系统内存、进程内存和进程利用率接口。系统查询失败不阻止进程接口探测。失败的来源只提示一次，本次运行不再尝试；部分来源失败不影响其他来源。显式报告所有活动进程值均为 N/A 的接口也会停用；空进程表本身不代表失败，允许后续新进程被采集。修复驱动、路径或权限后需要重启。`--no-gpu` 或 `gpu.enabled = false` 直接跳过全部 GPU 探测，消息中的 `gpu` 缺失；启用但不可用时将带类型的失败输入注册到框架，`header.inputs` 和指标的 `utilization_error` / `memory_error` 均可看到原因。
 
-探测数据不发送，运行时读取新观测。tegrastats 按 `sampling.gpu_utilization_ms` 持续输出；采集器优先消费最新的未使用观测，丢弃过旧缓存，避免每次都额外等待完整输出周期。探测启动的子进程继续使用。nvidia-smi 使用有超时的只读命令，每次最多接收 4 MiB 输出，默认超时为 `gpu.timeout_ms = 1500`；使用较慢的 tegrastats 输出周期时需相应调整超时。
+探测数据不发送，运行时读取新观测。tegrastats 按 `sampling.gpu_utilization_ms` 持续输出；采集器通过非阻塞管道按顺序消费输出，不使用无法取消的读取线程。探测启动的子进程继续使用。tegrastats 和 nvidia-smi 共用可取消、有截止时间的子进程封装；nvidia-smi 使用只读命令，每次最多接收 4 MiB 输出，默认超时为 `gpu.timeout_ms = 1500`；使用较慢的 tegrastats 输出周期时需相应调整超时。
 
-系统 GPU 利用率、GPU 内存、进程 GPU 利用率分别在独立采集线程运行，pmon 不再阻塞内存或 CPU 采集。GPU 内存采集内部的系统/进程查询仍共用一次采集调用。已启用来源允许在运行时错误后恢复；错误替换该输入的旧结果，不继续使用上一次成功值。
+系统 GPU 利用率、GPU 内存、进程 GPU 利用率分别在独立采集线程运行，pmon 不再阻塞内存或 CPU 采集。GPU 内存采集内部的系统/进程查询仍共用一次采集调用，驱动内存和进程利用率使用不同 Rust 数据类型。普通读取失败允许下次重试，框架监督到任务超时、崩溃或入队超时则停用该来源并报告；失败观测不会继续使用旧成功值。
 
-GPU 指标含独立的来源、实际读取时间和缺失原因。进程 GPU 数据在查询前后核对 `/proc/PID/stat` 的启动 tick，组装时再按 `(PID, start_ticks)` 匹配，避免 PID 复用混淆。正常退出时只终止本程序创建的子进程。
+GPU 指标含独立的来源、实际读取时间和缺失原因。进程 GPU 数据在查询前后核对 `/proc/PID/stat` 的启动 tick，组装时再按 `(PID, start_ticks)` 匹配，避免 PID 复用混淆。退出或命令失败时只终止本程序创建的子进程组，避免其后代持有 stdout 导致关闭卡住。
 
-CPU 采集器的首次观测、首次出现的进程/线程/逻辑核以及计数器重置后没有有效差分，利用率字段保持缺失。发布周期独立，因此第一条消息可能已包含第二次 CPU 观测。进程内存尚未采集、过期或身份不匹配时，`rss_bytes` / `virtual_bytes` 缺失；这两个字段增加了 optional presence，编号和 wire type 保持兼容。进程与线程标识包含系统 boot ID、PID/TID 和启动 tick；退出、PID 复用、核上下线不会沿用旧实体的基线。无法读取的进程会跳过并计数，线程不完整情况写入 `threads_error`。
+CPU 采集器的首次观测、首次出现的进程/线程/逻辑核以及计数器重置后没有有效差分，利用率字段保持缺失。每个来源第一次观测即可发送，因此消息允许部分指标尚未就绪。进程内存尚未采集、过期或身份不匹配时，`rss_bytes` / `virtual_bytes` 缺失；`cpu_time_ticks` 也使用 optional presence，CPU 不可用时不伪造 0；字段编号和 wire type 保持兼容。进程组装器按各个有效输入的 `(PID, start_ticks)` 并集合并实体，不以 CPU 输入作为进程名单。CPU 不可用时仍输出内存、线程或 GPU 信息；不同启动 tick 的同一 PID 保留为不同实例，旧来源过期后移除。进程与线程标识包含系统 boot ID、PID/TID 和启动 tick；退出、PID 复用、核上下线不会沿用旧实体的基线。无法读取的进程会跳过并计数，线程不完整情况写入 `threads_error`。
 
 ## 分层与数据流
 
 ```text
-CPU Collector -------------------+
-Memory Collector ----------------+--> System Assembler ---> /syslens/system
-GPU Utilization Collector -------+
-GPU Memory Collector ------------+
-                                 |
-                                 +--> Process Assembler --> /syslens/processes
-Process CPU Collector -----------+
-Process Memory Collector --------+
-Thread CPU Collector ------------+
-Process GPU Utilization Collector+
+Collectors (独立周期、普通 Rust 数据)
+    |
+    v
+有界观测 FIFO (保留每次完成的观测；入队等待有上限)
+    |
+    v
+Runtime (类型注册、依赖校验、更新输入视图、按观测触发)
+    |
+    v
+Assemblers (合并领域数据 -> Protobuf 编码一次)
+    |
+    v
+Dispatcher (非阻塞分发同一份字节)
+    +--> 录制 FIFO ----------------------> MCAP
+    +--> 按 Topic 保留最新待发值、独立限频 -> Foxglove
 
-Assembler -> Protobuf 编码一次 -> Dispatcher
-                                  |
-                                  +-> 独立有界队列 -> MCAP Output
-                                  |
-                                  +-> 独立有界队列 -> Foxglove Output
+OperationContext / Task 统一管理取消、截止时间和退出监督
 ```
 
 | 模块 | 职责与依赖边界 |
 | --- | --- |
-| `app` / `config` | 配置、信号处理、创建并注册所有具体组件。 |
-| `framework` | 通用 Collector、Assembler、Output 接口；调度、批次、类型化 Key、队列、生命周期。不了解具体指标与 Protobuf 类型。 |
+| `app` / `config` | 配置、信号处理、创建并注册组件；不承担驱动来源选择。 |
+| `framework` | 通用 Collector、Assembler、Output 接口；有界观测流、类型化依赖、调度与任务监督、输出隔离。不了解具体指标与 Protobuf 类型。 |
 | `data` | 采集器输出的普通 Rust 数据结构，独立于协议。 |
 | `collectors` | 读取与计算指标、维护差分基线；不依赖 Protobuf、组装器或输出实现。 |
-| `assemblers` | 声明输入依赖，读取 Batch，组合一个或多个采集结果；不调用具体采集器或输出模块。 |
+| `assemblers` | 声明带类型的依赖，读取 Batch，按领域身份组合输入并编码；不调用采集器、探测来源或选择输出策略。 |
 | `protocol` / `proto` | Protobuf 定义、生成类型、descriptor、编码封装。 |
 | `outputs::mcap` | 使用 mcap crate 保存通用消息，管理压缩、分段与结束处理。 |
 | `outputs::foxglove` | 使用 Foxglove Rust SDK 发布同一份已编码消息。 |
@@ -150,45 +156,42 @@ Assembler -> Protobuf 编码一次 -> Dispatcher
 
 系统和进程协议分别导入公共协议。三个文件共用 `syslens.v1` package，生成的 Rust 类型仍位于 `protocol::pb`；消息名称、字段编号和编码格式保持兼容。[build.rs](build.rs) 编译这些文件，并将全部协议及 Timestamp 依赖打包到同一份 descriptor，供 MCAP 和 Foxglove 使用。
 
-每个采集器在自己的线程按配置周期运行，完成后更新最新结果；组装器按发布周期读取这些结果，不等待任何采集器。采集期间不持有共享快照锁。同一份 GPU 内存结果可供系统和进程组装器复用，框架只接收通用 `Schedule`，不了解指标类型。
+每个采集器在自己的线程按单调时钟调度。已完成的观测先进入 FIFO，Runtime 逐个更新输入视图并触发所有相关组装器。慢来源不阻塞其他来源。调度错过时间点时跳过，不补发虚构观测。
 
-调度采用单调时钟，超时会跳过错过的时间点，继续沿原时间网格运行，不连续补采，也不在慢采集结束后额外等待完整周期。发布时形成一致的缓存快照；`header.timestamp` 是快照/发布时间，不代表各指标同时采集。
+类型依赖包含名称和 `TypeId`，注册时校验。`batch.read(key)` 返回 `Result<Option<&T>>`：`None` 表示尚未就绪、失败或过期；未声明的依赖和类型错误返回 `Err`，组装器必须传播。所有过期判断使用单调时间；触发观测必须被保留，其他输入按触发观测完成时的年龄判断。排队或磁盘延迟不会把历史触发观测过滤掉。
 
-`header.inputs` 提供每个输入的诊断信息：
+`header.inputs` 提供诊断信息：
 
 | 字段 | 含义 |
 | --- | --- |
-| `timestamp` | 该输入最近一次采集开始的 Unix 时间，尚未完成首采时缺失。 |
-| `interval_ms` / `actual_interval_ms` | 配置周期 / 最近两次采集开始的实际间隔；首采无实际间隔。 |
+| `timestamp` | 该输入观测开始的 Unix 时间；尚未完成或永久不可用时缺失。 |
+| `interval_ms` / `actual_interval_ms` | 配置周期 / 最近两次采集开始的实际间隔。 |
 | `collection_duration_ms` | 最近一次采集调用的耗时。 |
-| `age_ms` / `stale` | 基于单调时钟计算的数据年龄 / 是否超过过期阈值。 |
-| `sample_sequence` | 该输入的观测序号；相同序号表示多个消息复用了同一次观测。 |
+| `age_ms` / `stale` | 从该输入采集完成到触发观测完成的单调时间差 / 是否过期。 |
+| `sample_sequence` | 来源观测序号；复用值保留原序号。 |
 | `missed_periods` | 采集线程累计跳过的调度时间点数量。 |
-| `skipped_samples` | 已完成但在发布前被更新观测覆盖的累计样本数。 |
-| `error` | 尚未就绪、采集错误或过期原因。 |
+| `skipped_samples` | 旧缓存覆盖计数，已 deprecated；新观测流始终填 0，不能作为输出丢失计数。 |
+| `error` | 尚未就绪、不可用、读取错误、过期或任务停用原因。 |
 
-尚未完成、失败或过期的输入不填入指标；未过期的慢速输入可被多条消息复用，并保留真实采集时间。进程 CPU、内存、线程、GPU 数据按 `(PID, start_ticks)` 关联。GPU 的 `utilization_timestamp` / `memory_timestamp` 另外保存来源的实际读取/接收时间，驱动内部的统计窗口仍由接口决定。
+## 录制、过载与退出
 
-缓存有界，每个采集器只保存最新结果。采样快于发布、线程调度抖动或输出背压均可能覆盖中间观测，`skipped_samples` 明确记录这种情况；MCAP 保存的是每条已组装消息，不能恢复尚未发布的被覆盖观测。需要更细时间分辨率时应同时缩短发布周期，并检查实际间隔、丢失计数和本程序开销。程序错误（例如重复注册、依赖未注册、相同 Topic 冲突 Schema）仍会报错。
-
-## 录制与输出行为
-
-- 录制队列满时对消息发布施加背压；采集线程继续更新缓存，已组装并进入输出流程的消息不会因队列满而丢弃；磁盘写入错误会使程序报错退出。
-- 实时队列满时丢弃新到达的实时消息，并在退出时报告数量。实时发送为尽力而为，慢客户端还受 SDK 内部队列约束。
-- 两种输出共享 Protobuf 编码后的字节；各有工作线程和队列，互不调用。
-- MCAP 使用 Zstd 压缩，默认每 300 秒或累计 64 MiB 未压缩消息负载后，在下一条消息前轮转；后者不是精确文件大小上限。
-- `recording.flush_ms` 只控制刷盘，不控制采集；持续写入时默认每 1000 ms 完成并 flush 当前 chunk，分段结束和正常退出时写入索引、footer 并同步文件。强制终止或掉电不能保证最后一段完整。
-- 队列容量按消息条数限制；大量进程/线程会使单条进程消息变大，可用 PID/名称筛选降低开销。
+- MCAP 默认使用完整 FIFO。队列满时默认 `overflow = "disable"`：立即报告并停止接受后续录制消息，排空已接收数据，实时输出继续工作。磁盘持续跟不上时不承诺无限期无损。
+- Foxglove 默认按 Topic 合并待发值，单独按 `interval_ms` 限频；这是显示降采样，不影响录制。SDK 内部的慢客户端队列仍属于尽力发送。
+- 每个输出支持 `overflow = "disable" / "drop_newest" / "drop_oldest"` 和 `on_failure = "isolate" / "stop"`。默认隔离失败；选择 `stop` 可要求该输出故障时结束整个运行。所有输出或所有采集任务失效也会结束运行。丢弃和停用立即写 stderr，退出时汇总；发生输出故障的运行最终返回错误。
+- 观测 FIFO 满时只暂停生产者的后续采集，不覆盖其已完成观测。超过 `runtime.enqueue_timeout_ms` 仍不能入队，则报告未交付序号并停用该来源。队列容量按条数限制，不是字节数；大进程/线程集合应配合筛选与容量规划。
+- MCAP 使用 Zstd 压缩，默认每 300 秒或累计 64 MiB 未压缩负载后轮转。`flush_ms` 控制 chunk flush；分段结束和正常退出时写索引、footer 并同步文件。强制终止、掉电或 I/O 超时不能保证当前分段完整。
+- 采集和输出共用 `OperationContext` 的取消/截止时间约定。子进程使用非阻塞读取，进程/线程扫描定期检查取消；Foxglove 关闭也遵守截止时间。
+- 退出预算默认 5000 ms。先取消采集并处理已完成观测，最多使用一半预算；剩余预算用于所有输出并行排空与收尾。Rust 不能强制终止不合作的线程或内核中卡住的 I/O，因此超时会明确返回错误并分离该线程，不无限等待，也不声称数据已完整落盘。
 
 ## 扩展采集能力
 
 新增指标时：
 
-1. 在 `data` 定义普通 Rust 数据，在 `collectors` 实现 `Collector<Data = YourData>`。
+1. 在 `data` 定义普通 Rust 数据，在 `collectors` 实现 `Collector<Data = YourData>`，在长循环和 I/O 等待中遵守 `OperationContext`。
 2. 在 `app` 创建 `Key<YourData>`，用 `Runtime::add_collector(key, collector, schedule)` 注册，并在配置中提供该指标的周期；框架内部不需要增加指标枚举或分支。
-3. 让现有组装器增加该输入，或新增组装器；通过 `dependencies()` 声明 Key 名称，再通过 `batch.get(key)` 读取当前缓存快照中的有效结果。
+3. 让现有组装器增加该输入，或新增组装器；通过 `key.dependency()` 声明带类型的依赖，再通过 `batch.read(key)?` 读取有效结果。依赖不可用时处理 `None`，不要吞掉接线错误。
 4. 按职责扩展 `proto/common.proto`、`proto/system.proto` 或 `proto/process.proto`，由组装器构造消息并调用 `protocol::encode`。新增协议文件时同步更新 `build.rs` 的编译列表。同一个采集结果可以供多个组装器使用。
-5. 在 `app` 注册组装器。两个输出模块无需修改。
+5. 在 `app` 注册组装器；可选能力探测失败时使用 `add_capability` / `add_unavailable` 注册原因。两个输出模块无需修改。
 
 Protobuf 已发布字段的编号不能重用，删除字段时保留编号和名称；新增指标优先增加字段或消息。接口与完整消息定义分别见 [framework](src/framework) 和 [proto](proto)。
 
@@ -202,6 +205,6 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-测试覆盖计数器差分、核上下线、PID 复用、Jetson 输出解析与启动探测（失败不再重试、超时、子进程复用）、独立周期与慢源隔离、过期/失败输入、调度超时、有界队列与关闭、MCAP 分段及 Schema、真实 Linux 进程/线程到 MCAP，以及真实 WebSocket 订阅后的 Protobuf 和时间戳验证。
+测试覆盖高频观测逐条保留、实时降采样、慢输出与失败隔离、显式停止策略、类型依赖校验、进程多来源合并与 PID 复用、GPU 分项探测与进程身份核对、可取消子进程及退出时间上限；同时验证真实 Linux 进程/线程进入完整 MCAP、分段 Schema，以及真实 WebSocket 订阅后的 Protobuf 和时间戳。
 
 开发验证环境为 ARM64 Linux 容器。GPU 测试使用 sysfs、tegrastats、nvmap 与 nvidia-smi 格式样本及模拟命令；覆盖 N/A、来源停用、超时和进程身份匹配。尚未在实体 Orin/Thor 上验证，驱动/BSP 的接口可用性及权限仍需在目标机器确认。

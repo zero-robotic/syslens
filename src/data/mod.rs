@@ -22,6 +22,7 @@ pub struct ProcessData {
 }
 #[derive(Debug)]
 pub struct ProcessMemoryData {
+    pub name: String,
     pub rss_bytes: u64,
     pub virtual_bytes: u64,
 }
@@ -45,6 +46,7 @@ pub struct ThreadData {
 }
 #[derive(Debug)]
 pub struct ThreadGroup {
+    pub process_name: String,
     pub pid: u32,
     pub process_start_ticks: u64,
     pub items: Vec<ThreadData>,
@@ -63,23 +65,34 @@ pub struct GpuData {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct GpuMetricsData {
-    pub utilization_percent: Option<f64>,
-    pub memory_used_bytes: Option<u64>,
-    pub memory_total_bytes: Option<u64>,
-    pub utilization_source: String,
-    pub memory_source: String,
-    pub memory_scope: String,
-    pub utilization_timestamp_ns: Option<u64>,
-    pub memory_timestamp_ns: Option<u64>,
-    pub utilization_error: Option<String>,
-    pub memory_error: Option<String>,
+pub struct GpuMemory {
+    pub used_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub source: String,
+    pub scope: String,
+    pub observed_at_ns: Option<u64>,
+    pub error: Option<String>,
 }
-
+#[derive(Debug, Default, Clone)]
+pub struct GpuUtilization {
+    pub percent: Option<f64>,
+    pub source: String,
+    pub observed_at_ns: Option<u64>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone)]
+pub struct Named<T> {
+    pub name: String,
+    pub value: T,
+}
 #[derive(Debug, Default)]
-pub struct GpuAccountingData {
-    pub system: GpuMetricsData,
-    // Identity includes start_ticks, so a reused PID cannot inherit another process's GPU data.
-    pub processes: BTreeMap<(u32, u64), GpuMetricsData>,
-    pub missing_process: GpuMetricsData,
+pub struct GpuMemoryData {
+    pub system: GpuMemory,
+    pub processes: BTreeMap<(u32, u64), Named<GpuMemory>>,
+    pub missing_process: GpuMemory,
+}
+#[derive(Debug, Default)]
+pub struct ProcessGpuUtilizationData {
+    pub processes: BTreeMap<(u32, u64), Named<GpuUtilization>>,
+    pub missing_process: GpuUtilization,
 }

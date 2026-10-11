@@ -10,11 +10,11 @@ message InputStatus {
   uint64 interval_ms = 4; // Configured collection period.
   optional double actual_interval_ms = 5; // Monotonic start-to-start interval.
   optional double collection_duration_ms = 6;
-  optional double age_ms = 7; // Age since collection started, at publication.
+  optional double age_ms = 7; // Age since collection completed, at the triggering observation.
   bool stale = 8; // Stale inputs are excluded from the assembled payload.
   uint64 sample_sequence = 9; // Zero until the first attempt finishes.
   uint64 missed_periods = 10; // Cumulative deadlines skipped by this collector.
-  uint64 skipped_samples = 11; // Completed samples superseded before publication.
+  uint64 skipped_samples = 11 [deprecated = true]; // Legacy latest-cache loss counter; always zero for observation streams.
 }
 message Header {
   google.protobuf.Timestamp timestamp = 1;
@@ -22,6 +22,7 @@ message Header {
   string host = 3;
   string boot_id = 4;
   repeated InputStatus inputs = 5;
+  string trigger_input = 6; // Input whose observation produced this message.
 }
 // Jetson uses shared RAM. GPU allocation accounting is distinct from system RAM/RSS.
 // Missing measurements are absent, never inferred from another scope or filled with zero.

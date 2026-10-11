@@ -1,6 +1,6 @@
 use crate::{
     data::CpuData,
-    framework::{CollectContext, Collector},
+    framework::{Collector, OperationContext},
 };
 use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, fs, path::PathBuf};
@@ -63,7 +63,8 @@ impl CpuCollector {
 }
 impl Collector for CpuCollector {
     type Data = CpuData;
-    fn collect(&mut self, _: &CollectContext) -> Result<CpuData> {
+    fn collect(&mut self, context: &OperationContext) -> Result<CpuData> {
+        context.check()?;
         let current = parse(
             &fs::read_to_string(&self.path).with_context(|| self.path.display().to_string())?,
         )?;
@@ -103,13 +104,13 @@ mod tests {
         let mut collector = CpuCollector::new(dir.path());
         assert_eq!(
             collector
-                .collect(&CollectContext::now())
+                .collect(&OperationContext::now())
                 .unwrap()
                 .usage_percent,
             None
         );
         fs::write(dir.path().join("stat"), "cpu 2 0 0 18\ncpu2 1 0 0 9\n").unwrap();
-        let data = collector.collect(&CollectContext::now()).unwrap();
+        let data = collector.collect(&OperationContext::now()).unwrap();
         assert_eq!(data.usage_percent, Some(10.0));
         assert_eq!(data.cores.get(&2), Some(&None));
         assert!(!data.cores.contains_key(&0));

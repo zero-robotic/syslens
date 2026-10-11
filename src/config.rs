@@ -12,10 +12,10 @@ pub struct Cli {
     /// Configuration file, relative to the working directory unless an absolute path is given.
     #[arg(short, long, default_value = "config/syslens.toml")]
     pub config: PathBuf,
-    /// Message publication interval; collector intervals are configured in [sampling].
+    /// Live display interval; recording preserves every observation.
     #[arg(long)]
     pub interval_ms: Option<u64>,
-    /// Stop after this many publication rounds. Collectors run independently.
+    /// Stop after this many interval-ms time windows; not a message count.
     #[arg(long)]
     pub samples: Option<u64>,
     /// Collect these PIDs instead of the configured process selector.
@@ -44,6 +44,7 @@ pub struct Config {
     pub samples: Option<u64>,
     pub proc_root: PathBuf,
     pub sampling: SamplingConfig,
+    pub runtime: RuntimeConfig,
     pub processes: ProcessConfig,
     pub gpu: GpuConfig,
     pub recording: RecordingConfig,
@@ -56,6 +57,7 @@ impl Default for Config {
             samples: None,
             proc_root: "/proc".into(),
             sampling: SamplingConfig::default(),
+            runtime: RuntimeConfig::default(),
             processes: ProcessConfig::default(),
             gpu: GpuConfig::default(),
             recording: RecordingConfig::default(),
@@ -64,6 +66,56 @@ impl Default for Config {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuntimeConfig {
+    pub observation_queue_capacity: usize,
+    pub enqueue_timeout_ms: u64,
+    pub collection_timeout_ms: u64,
+    pub shutdown_timeout_ms: u64,
+    pub startup_timeout_ms: u64,
+}
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            observation_queue_capacity: 1024,
+            enqueue_timeout_ms: 1000,
+            collection_timeout_ms: 5000,
+            shutdown_timeout_ms: 5000,
+            startup_timeout_ms: 15000,
+        }
+    }
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverflowMode {
+    Disable,
+    DropNewest,
+    DropOldest,
+}
+impl From<OverflowMode> for crate::framework::Overflow {
+    fn from(value: OverflowMode) -> Self {
+        match value {
+            OverflowMode::Disable => Self::Disable,
+            OverflowMode::DropNewest => Self::DropNewest,
+            OverflowMode::DropOldest => Self::DropOldest,
+        }
+    }
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureMode {
+    Isolate,
+    Stop,
+}
+impl From<FailureMode> for crate::framework::FailurePolicy {
+    fn from(value: FailureMode) -> Self {
+        match value {
+            FailureMode::Isolate => Self::Isolate,
+            FailureMode::Stop => Self::Stop,
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SamplingConfig {
@@ -140,6 +192,9 @@ pub struct RecordingConfig {
     pub enabled: bool,
     pub directory: PathBuf,
     pub queue_capacity: usize,
+    pub overflow: OverflowMode,
+    pub on_failure: FailureMode,
+    pub operation_timeout_ms: u64,
     pub rotate_seconds: u64,
     pub rotate_payload_bytes: u64,
     pub flush_ms: u64,
@@ -150,6 +205,9 @@ impl Default for RecordingConfig {
             enabled: true,
             directory: "recordings".into(),
             queue_capacity: 128,
+            overflow: OverflowMode::Disable,
+            on_failure: FailureMode::Isolate,
+            operation_timeout_ms: 5000,
             rotate_seconds: 300,
             rotate_payload_bytes: 64 * 1024 * 1024,
             flush_ms: 1000,
@@ -163,6 +221,9 @@ pub struct FoxgloveConfig {
     pub bind: String,
     pub port: u16,
     pub queue_capacity: usize,
+    pub overflow: OverflowMode,
+    pub on_failure: FailureMode,
+    pub operation_timeout_ms: u64,
 }
 impl Default for FoxgloveConfig {
     fn default() -> Self {
@@ -171,6 +232,9 @@ impl Default for FoxgloveConfig {
             bind: "127.0.0.1".into(),
             port: 8765,
             queue_capacity: 128,
+            overflow: OverflowMode::DropOldest,
+            on_failure: FailureMode::Isolate,
+            operation_timeout_ms: 5000,
         }
     }
 }
@@ -226,6 +290,28 @@ impl Config {
             (1..=86_400_000).contains(&self.interval_ms),
             "interval_ms must be between 1 ms and 24 hours"
         );
+        ensure!(
+            self.samples
+                .is_none_or(|count| self.interval_ms.checked_mul(count).is_some()),
+            "run duration overflow"
+        );
+        ensure!(
+            self.runtime.observation_queue_capacity > 0,
+            "observation queue must be positive"
+        );
+        for timeout in [
+            self.runtime.enqueue_timeout_ms,
+            self.runtime.collection_timeout_ms,
+            self.runtime.shutdown_timeout_ms,
+            self.runtime.startup_timeout_ms,
+            self.recording.operation_timeout_ms,
+            self.foxglove.operation_timeout_ms,
+        ] {
+            ensure!(
+                (1..=86_400_000).contains(&timeout),
+                "timeouts must be 1 ms to 24 hours"
+            );
+        }
         let sampling = &self.sampling;
         for (name, value) in [
             ("system_cpu_ms", sampling.system_cpu_ms),
@@ -328,5 +414,33 @@ mod tests {
                 "accepted invalid setting: {settings}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    #[test]
+    fn runtime_and_output_policies_are_configurable_and_invalid_limits_rejected() {
+        let mut config: Config = toml::from_str("[runtime]\nobservation_queue_capacity = 17\nenqueue_timeout_ms = 200\nshutdown_timeout_ms = 3000\n[recording]\noverflow = 'drop_newest'\non_failure = 'stop'\noperation_timeout_ms = 600\n").unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.runtime.observation_queue_capacity, 17);
+        assert_eq!(config.runtime.enqueue_timeout_ms, 200);
+        assert!(matches!(
+            config.recording.overflow,
+            OverflowMode::DropNewest
+        ));
+        assert!(matches!(config.recording.on_failure, FailureMode::Stop));
+        for text in [
+            "[runtime]\nobservation_queue_capacity = 0",
+            "[runtime]\ncollection_timeout_ms = 0",
+            "[runtime]\nshutdown_timeout_ms = 0",
+            "[foxglove]\noperation_timeout_ms = 0",
+        ] {
+            let mut config: Config = toml::from_str(text).unwrap();
+            assert!(config.validate().is_err());
+        }
+        assert!(toml::from_str::<Config>("[recording]\noverflow = 'block'").is_err());
+        assert!(toml::from_str::<Config>("[recording]\non_failure = 'ignore'").is_err());
     }
 }

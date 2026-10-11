@@ -1,4 +1,4 @@
-use crate::framework::{Output, Sample};
+use crate::framework::{OperationContext, Output, Sample};
 use anyhow::Result;
 use foxglove::{
     Context, PartialMetadata, RawChannel, Schema, WebSocketServer, WebSocketServerHandle,
@@ -28,7 +28,8 @@ impl FoxgloveOutput {
     }
 }
 impl Output for FoxgloveOutput {
-    fn write(&mut self, sample: &Sample) -> Result<()> {
+    fn write(&mut self, sample: &Sample, context: &OperationContext) -> Result<()> {
+        context.check()?;
         let descriptor = &sample.stream;
         if !self.channels.contains_key(&descriptor.topic) {
             let channel = self
@@ -49,9 +50,16 @@ impl Output for FoxgloveOutput {
         );
         Ok(())
     }
-    fn close(&mut self) -> Result<()> {
+    fn close(&mut self, context: &OperationContext) -> Result<()> {
+        context.check()?;
         if let Some(server) = self.server.take() {
-            server.stop().wait_blocking();
+            // SDK tasks run on its own runtime. Poll only their shutdown future,
+            // so the framework deadline remains effective without another thread.
+            let mut stopped = std::pin::pin!(server.stop().wait());
+            let mut task_context = std::task::Context::from_waker(std::task::Waker::noop());
+            while std::future::Future::poll(stopped.as_mut(), &mut task_context).is_pending() {
+                context.wait(std::time::Duration::from_millis(2))?;
+            }
         }
         self.channels.clear();
         Ok(())
@@ -59,7 +67,7 @@ impl Output for FoxgloveOutput {
 }
 impl Drop for FoxgloveOutput {
     fn drop(&mut self) {
-        let _ = self.close();
+        let _ = self.close(&OperationContext::now());
     }
 }
 
@@ -86,7 +94,7 @@ mod tests {
             protocol::stream("/syslens/system", "SystemSample"),
             1_234_567_890,
         );
-        output.write(&sample).unwrap();
+        output.write(&sample, &OperationContext::now()).unwrap();
         let port = output.server.as_ref().unwrap().port();
         let mut request = format!("ws://127.0.0.1:{port}")
             .into_client_request()
@@ -133,7 +141,7 @@ mod tests {
             assert!(Instant::now() < deadline, "subscription was not registered");
             std::thread::sleep(Duration::from_millis(5));
         }
-        output.write(&sample).unwrap();
+        output.write(&sample, &OperationContext::now()).unwrap();
         loop {
             if let Message::Binary(frame) = socket.read().unwrap() {
                 assert_eq!(frame[0], 1); // Foxglove Message Data opcode.
@@ -156,6 +164,6 @@ mod tests {
         }
         socket.close(None).unwrap();
         drop(socket);
-        output.close().unwrap();
+        output.close(&OperationContext::now()).unwrap();
     }
 }

@@ -1,23 +1,23 @@
-use super::procfs::{Selector, read_stat};
+use super::{
+    command::command,
+    procfs::{Selector, read_stat},
+};
 use crate::{
-    data::{GpuAccountingData, GpuData, GpuMetricsData},
-    framework::{CollectContext, Collector, timestamp_ns},
+    data::{GpuData, GpuMemory, GpuMemoryData, GpuUtilization, Named, ProcessGpuUtilizationData},
+    framework::{Collector, OperationContext, timestamp_ns},
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::Read,
-    os::fd::AsRawFd,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
 
 const MIB: u64 = 1024 * 1024;
-const DEVICE_QUERY: &[&str] = &[
-    "--query-gpu=name,utilization.gpu,memory.total,memory.used",
+const LOAD_QUERY: &[&str] = &[
+    "--query-gpu=name,utilization.gpu",
+    "--format=csv,noheader,nounits",
+    "-i",
+    "0",
+];
+const MEMORY_QUERY: &[&str] = &[
+    "--query-gpu=name,memory.total,memory.used",
     "--format=csv,noheader,nounits",
     "-i",
     "0",
@@ -30,226 +30,271 @@ const PROCESS_QUERY: &[&str] = &[
 ];
 const UTILIZATION_QUERY: &[&str] = &["pmon", "-i", "0", "-s", "u", "-c", "1"];
 
+pub type Capability<T> = Result<Box<dyn Collector<Data = T>>, String>;
+pub struct AccountingSources {
+    pub memory: Capability<GpuMemoryData>,
+    pub process_utilization: Capability<ProcessGpuUtilizationData>,
+    pub system_utilization: Capability<GpuData>,
+}
 #[derive(Clone)]
-enum Backend {
-    Nvmap(PathBuf),
-    Smi {
-        executable: PathBuf,
-        // Failed startup capabilities stay disabled for this run.
-        device: Result<(), String>,
-        load: Result<(), String>,
-        memory: Result<(), String>,
-        utilization: Result<(), String>,
-    },
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Metric {
-    Memory,
-    ProcessUtilization,
-}
-
-pub struct GpuCollectors {
-    pub memory: Result<GpuAccountingCollector, String>,
-    pub process_utilization: Result<GpuAccountingCollector, String>,
-    pub system_utilization: Result<SmiLoadCollector, String>,
-}
-
-pub struct SmiLoadCollector {
+struct Query {
     executable: PathBuf,
     timeout: Duration,
 }
-impl Collector for SmiLoadCollector {
-    type Data = GpuData;
-    fn collect(&mut self, _: &CollectContext) -> Result<Self::Data> {
-        let sample = parse_device(&command(&self.executable, DEVICE_QUERY, self.timeout)?)?;
-        Ok(GpuData {
-            utilization_percent: sample
-                .utilization_percent
-                .context("nvidia-smi system utilization N/A")?,
-            source: sample.utilization_source,
-            observed_at_ns: sample.utilization_timestamp_ns.unwrap_or_else(timestamp_ns),
-        })
+impl Query {
+    fn run(&self, args: &[&str], context: &OperationContext) -> Result<String> {
+        command(&self.executable, args, &context.limited(self.timeout))
+    }
+}
+#[derive(Clone)]
+struct ProcessAccess {
+    root: PathBuf,
+    selector: Option<Selector>,
+}
+impl ProcessAccess {
+    fn identities(&self, context: &OperationContext) -> Result<BTreeMap<u32, (u64, String)>> {
+        let mut identities = BTreeMap::new();
+        if let Some(selector) = &self.selector {
+            for pid in selector.candidates(&self.root)? {
+                context.check()?;
+                if let Ok(stat) = read_stat(&self.root.join(pid.to_string()).join("stat"))
+                    && stat.pid == pid
+                    && selector.includes(&stat)
+                {
+                    identities.insert(pid, (stat.start_ticks, stat.name));
+                }
+            }
+        }
+        Ok(identities)
+    }
+    fn join<T>(
+        &self,
+        before: BTreeMap<u32, (u64, String)>,
+        rows: BTreeMap<u32, T>,
+        context: &OperationContext,
+    ) -> Result<BTreeMap<(u32, u64), Named<T>>> {
+        let after = self.identities(context)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(pid, value)| {
+                let (start, _) = before.get(&pid)?;
+                let (current, name) = after.get(&pid)?;
+                (start == current).then_some((
+                    (pid, *start),
+                    Named {
+                        name: name.clone(),
+                        value,
+                    },
+                ))
+            })
+            .collect())
     }
 }
 
-#[derive(Clone)]
-pub struct GpuAccountingCollector {
-    backend: Backend,
-    metric: Metric,
-    proc_root: PathBuf,
-    selector: Option<Selector>,
-    timeout: Duration,
-}
-
-impl GpuAccountingCollector {
+impl AccountingSources {
     pub fn probe(
-        nvmap_clients: PathBuf,
+        nvmap: PathBuf,
         executable: PathBuf,
         timeout: Duration,
         proc_root: PathBuf,
         selector: Option<Selector>,
-    ) -> Result<Self> {
-        let nvmap = fs::read_to_string(&nvmap_clients)
-            .with_context(|| nvmap_clients.display().to_string())
-            .and_then(|text| parse_nvmap(&text));
-        let backend = match nvmap {
-            Ok(_) => Backend::Nvmap(nvmap_clients),
+        want_system_utilization: bool,
+        context: &OperationContext,
+    ) -> Self {
+        let query = Query {
+            executable,
+            timeout,
+        };
+        let access = ProcessAccess {
+            root: proc_root,
+            selector,
+        };
+        // No common device query gates other capabilities. Each source gets one
+        // independent probe, and failed capabilities are never polled later.
+        let system_utilization = if want_system_utilization {
+            query
+                .run(LOAD_QUERY, context)
+                .and_then(|text| parse_load(&text))
+                .map(|_| {
+                    Box::new(SmiLoad {
+                        query: query.clone(),
+                    }) as Box<dyn Collector<Data = GpuData>>
+                })
+                .map_err(|e| format!("{e:#}"))
+        } else {
+            Err("system utilization provided by another source".into())
+        };
+        let process_utilization = if access.selector.is_some() {
+            query
+                .run(UTILIZATION_QUERY, context)
+                .and_then(|text| parse_process_utilization(&text))
+                .and_then(probe_values)
+                .map(|_| {
+                    Box::new(SmiProcessUtilization {
+                        query: query.clone(),
+                        access: access.clone(),
+                    }) as Box<dyn Collector<Data = ProcessGpuUtilizationData>>
+                })
+                .map_err(|e| format!("{e:#}"))
+        } else {
+            Err("process collection disabled".into())
+        };
+        let memory = match fs::read_to_string(&nvmap)
+            .with_context(|| nvmap.display().to_string())
+            .and_then(|text| parse_nvmap(&text))
+        {
+            Ok(_) => Ok(Box::new(MemoryCollector {
+                backend: MemoryBackend::Nvmap(nvmap),
+                access,
+            }) as Box<dyn Collector<Data = GpuMemoryData>>),
             Err(nvmap_error) => {
-                // A real GPU name rejects Orin's nvidia-smi display-driver stub.
-                let device_sample = command(&executable, DEVICE_QUERY, timeout)
-                    .and_then(|text| parse_device(&text))
-                    .with_context(|| {
-                        format!("nvmap unavailable ({nvmap_error:#}); nvidia-smi probe")
-                    })?;
-                let load = device_sample
-                    .utilization_percent
-                    .map(|_| ())
-                    .ok_or_else(|| "nvidia-smi system utilization N/A".to_string());
-                let device = if device_sample.memory_used_bytes.is_some()
-                    || device_sample.memory_total_bytes.is_some()
-                {
-                    Ok(())
+                let device = query
+                    .run(MEMORY_QUERY, context)
+                    .and_then(|text| parse_memory(&text))
+                    .and_then(|data| {
+                        ensure!(
+                            data.used_bytes.is_some() || data.total_bytes.is_some(),
+                            "system GPU memory unavailable"
+                        );
+                        Ok(())
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                let processes = if access.selector.is_some() {
+                    query
+                        .run(PROCESS_QUERY, context)
+                        .and_then(|text| parse_process_memory(&text))
+                        .and_then(probe_values)
+                        .map_err(|e| format!("{e:#}"))
                 } else {
-                    Err("nvidia-smi system memory is N/A".into())
+                    Err("process collection disabled".into())
                 };
-                let (memory, utilization) = if selector.is_some() {
-                    (
-                        command(&executable, PROCESS_QUERY, timeout)
-                            .and_then(|text| parse_process_memory(&text))
-                            .and_then(probe_values)
-                            .map_err(|error| format!("{error:#}")),
-                        command(&executable, UTILIZATION_QUERY, timeout)
-                            .and_then(|text| parse_process_utilization(&text))
-                            .and_then(probe_values)
-                            .map_err(|error| format!("{error:#}")),
-                    )
-                } else {
-                    (
-                        Err("process collection disabled".into()),
-                        Err("process collection disabled".into()),
-                    )
-                };
-                ensure!(
-                    load.is_ok() || device.is_ok() || memory.is_ok() || utilization.is_ok(),
-                    "no supported nvidia-smi metrics: system={device:?}, memory={memory:?}, utilization={utilization:?}"
-                );
-                Backend::Smi {
-                    executable,
-                    device,
-                    load,
-                    memory,
-                    utilization,
+                match (device, processes) {
+                    (Err(device), Err(processes)) => Err(format!(
+                        "nvmap: {nvmap_error:#}; system memory: {device}; process memory: {processes}"
+                    )),
+                    (device, processes) => Ok(Box::new(MemoryCollector {
+                        backend: MemoryBackend::Smi {
+                            query,
+                            device,
+                            processes,
+                        },
+                        access,
+                    })
+                        as Box<dyn Collector<Data = GpuMemoryData>>),
                 }
             }
         };
-        Ok(Self {
-            backend,
-            metric: Metric::Memory,
-            proc_root,
-            selector,
-            timeout,
-        })
-    }
-
-    pub fn split(self) -> GpuCollectors {
-        let (memory, utilization, system_utilization) = match &self.backend {
-            Backend::Nvmap(_) => (
-                Ok(()),
-                Err("per-process GPU utilization is not exposed by Orin nvmap".to_string()),
-                Err("nvmap does not expose system GPU utilization".to_string()),
-            ),
-            Backend::Smi {
-                executable,
-                device,
-                load,
-                memory,
-                utilization,
-            } => (
-                if device.is_ok() || memory.is_ok() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "system memory: {}; process memory: {}",
-                        device.as_ref().unwrap_err(),
-                        memory.as_ref().unwrap_err()
-                    ))
-                },
-                utilization.clone(),
-                load.clone().map(|_| SmiLoadCollector {
-                    executable: executable.clone(),
-                    timeout: self.timeout,
-                }),
-            ),
-        };
-        let process_utilization = utilization.map(|_| {
-            let mut collector = self.clone();
-            collector.metric = Metric::ProcessUtilization;
-            collector
-        });
-        GpuCollectors {
-            memory: memory.map(|_| self),
+        Self {
+            memory,
             process_utilization,
             system_utilization,
         }
     }
-
-    fn identities(&self) -> BTreeMap<u32, u64> {
-        let Some(selector) = &self.selector else {
-            return BTreeMap::new();
-        };
-        selector
-            .candidates(&self.proc_root)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|pid| {
-                let stat = read_stat(&self.proc_root.join(pid.to_string()).join("stat")).ok()?;
-                (stat.pid == pid && selector.includes(&stat)).then_some((pid, stat.start_ticks))
-            })
-            .collect()
+}
+struct SmiLoad {
+    query: Query,
+}
+impl Collector for SmiLoad {
+    type Data = GpuData;
+    fn collect(&mut self, context: &OperationContext) -> Result<Self::Data> {
+        parse_load(&self.query.run(LOAD_QUERY, context)?)
     }
 }
-
-impl Collector for GpuAccountingCollector {
-    type Data = GpuAccountingData;
-    fn collect(&mut self, _: &CollectContext) -> Result<Self::Data> {
-        // Read identities on both sides of the driver query. Never attach an exited
-        // process's GPU allocation to a newly created process with the same PID.
-        let before = self.identities();
-        let (system, by_pid, missing_process) = match &self.backend {
-            Backend::Nvmap(path) => {
+enum MemoryBackend {
+    Nvmap(PathBuf),
+    Smi {
+        query: Query,
+        device: Result<(), String>,
+        processes: Result<(), String>,
+    },
+}
+struct MemoryCollector {
+    backend: MemoryBackend,
+    access: ProcessAccess,
+}
+impl Collector for MemoryCollector {
+    type Data = GpuMemoryData;
+    fn collect(&mut self, context: &OperationContext) -> Result<Self::Data> {
+        context.check()?;
+        let before = self.access.identities(context)?;
+        let (system, rows, missing_process) = match &self.backend {
+            MemoryBackend::Nvmap(path) => {
                 let (total, clients) = parse_nvmap(
                     &fs::read_to_string(path).with_context(|| path.display().to_string())?,
                 )?;
                 let now = timestamp_ns();
-                let missing = GpuMetricsData {
-                    utilization_error: Some(
-                        "per-process GPU utilization is not exposed by Orin nvmap".into(),
-                    ),
-                    memory_error: Some("process is absent from the nvmap client snapshot".into()),
-                    memory_source: path.display().to_string(),
-                    memory_scope:
-                        "nvmap_client_allocations; may include multimedia/shared allocations".into(),
-                    ..Default::default()
-                };
-                let system = GpuMetricsData {
-                    memory_used_bytes: Some(total),
-                    memory_source: path.display().to_string(),
-                    memory_scope:
-                        "nvmap_total_allocations; not GPU-exclusive or a sum of process rows".into(),
-                    memory_timestamp_ns: Some(now),
-                    utilization_error: Some("nvmap does not expose system GPU utilization".into()),
+                let missing = GpuMemory {
+                    source: path.display().to_string(),
+                    scope: "nvmap_client_allocations; may include multimedia/shared allocations"
+                        .into(),
+                    error: Some("process is absent from nvmap snapshot".into()),
                     ..Default::default()
                 };
                 let rows = clients
                     .into_iter()
+                    .map(|(pid, used)| {
+                        (
+                            pid,
+                            GpuMemory {
+                                used_bytes: Some(used),
+                                observed_at_ns: Some(now),
+                                error: None,
+                                ..missing.clone()
+                            },
+                        )
+                    })
+                    .collect();
+                (
+                    GpuMemory {
+                        used_bytes: Some(total),
+                        source: path.display().to_string(),
+                        scope:
+                            "nvmap_total_allocations; not GPU-exclusive or a sum of process rows"
+                                .into(),
+                        observed_at_ns: Some(now),
+                        ..Default::default()
+                    },
+                    rows,
+                    missing,
+                )
+            }
+            MemoryBackend::Smi {
+                query,
+                device,
+                processes,
+            } => {
+                let system = available_query(device, query, MEMORY_QUERY, context)
+                    .and_then(|text| parse_memory(&text))
+                    .unwrap_or_else(|error| GpuMemory {
+                        error: Some(format!("{error:#}")),
+                        ..Default::default()
+                    });
+                let result = available_query(processes, query, PROCESS_QUERY, context)
+                    .and_then(|text| parse_process_memory(&text));
+                let missing = GpuMemory {
+                    source: "nvidia-smi/compute-apps/used_memory".into(),
+                    scope:
+                        "compute_process_gpu_allocation; graphics-only processes are not covered"
+                            .into(),
+                    error: Some(match &result {
+                        Ok(_) => "process is absent from compute-apps snapshot".into(),
+                        Err(e) => format!("{e:#}"),
+                    }),
+                    ..Default::default()
+                };
+                let now = timestamp_ns();
+                let rows = result
+                    .unwrap_or_default()
+                    .into_iter()
                     .map(|(pid, bytes)| {
                         (
                             pid,
-                            GpuMetricsData {
-                                memory_used_bytes: Some(bytes),
-                                memory_error: None,
-                                memory_timestamp_ns: Some(now),
+                            GpuMemory {
+                                used_bytes: bytes,
+                                observed_at_ns: bytes.map(|_| now),
+                                error: bytes
+                                    .is_none()
+                                    .then(|| "nvidia-smi process memory N/A".into()),
                                 ..missing.clone()
                             },
                         )
@@ -257,181 +302,108 @@ impl Collector for GpuAccountingCollector {
                     .collect();
                 (system, rows, missing)
             }
-            Backend::Smi {
-                executable,
-                device,
-                memory,
-                utilization,
-                ..
-            } => {
-                let system = if self.metric == Metric::Memory {
-                    match available_query(device, executable, DEVICE_QUERY, self.timeout)
-                        .and_then(|text| parse_device(&text))
-                    {
-                        Ok(mut data) => {
-                            data.utilization_percent = None;
-                            data.utilization_timestamp_ns = None;
-                            data.utilization_source.clear();
-                            data.utilization_error = None;
-                            data
-                        }
-                        Err(error) => GpuMetricsData {
-                            memory_error: Some(format!("{error:#}")),
-                            ..Default::default()
-                        },
-                    }
-                } else {
-                    GpuMetricsData::default()
-                };
-                let memory_result = if self.metric == Metric::Memory {
-                    available_query(memory, executable, PROCESS_QUERY, self.timeout)
-                        .and_then(|text| parse_process_memory(&text))
-                } else {
-                    Ok(BTreeMap::new())
-                };
-                let memory_time = timestamp_ns();
-                let utilization_result = if self.metric == Metric::ProcessUtilization {
-                    available_query(utilization, executable, UTILIZATION_QUERY, self.timeout)
-                        .and_then(|text| parse_process_utilization(&text))
-                } else {
-                    Ok(BTreeMap::new())
-                };
-                let utilization_time = timestamp_ns();
-                let missing = GpuMetricsData {
-                    memory_source: "nvidia-smi/compute-apps/used_memory".into(),
-                    memory_scope:
-                        "compute_process_gpu_allocation; graphics-only processes are not covered"
-                            .into(),
-                    utilization_source: "nvidia-smi/pmon/sm".into(),
-                    memory_error: Some(match &memory_result {
-                        Ok(_) => "process is absent from the compute-apps snapshot".into(),
-                        Err(error) => format!("{error:#}"),
-                    }),
-                    utilization_error: Some(match &utilization_result {
-                        Ok(_) => "process is absent from the pmon snapshot".into(),
-                        Err(error) => format!("{error:#}"),
-                    }),
-                    ..Default::default()
-                };
-                let mut rows: BTreeMap<u32, GpuMetricsData> = BTreeMap::new();
-                for (pid, bytes) in memory_result.unwrap_or_default() {
-                    let data = rows.entry(pid).or_insert_with(|| missing.clone());
-                    data.memory_used_bytes = bytes;
-                    data.memory_timestamp_ns = bytes.map(|_| memory_time);
-                    data.memory_error = bytes
-                        .is_none()
-                        .then(|| "nvidia-smi reports process memory N/A".into());
-                }
-                for (pid, percent) in utilization_result.unwrap_or_default() {
-                    let data = rows.entry(pid).or_insert_with(|| missing.clone());
-                    data.utilization_percent = percent;
-                    data.utilization_timestamp_ns = percent.map(|_| utilization_time);
-                    data.utilization_error = percent
-                        .is_none()
-                        .then(|| "nvidia-smi reports process utilization N/A".into());
-                }
-                (system, rows, missing)
-            }
         };
-        let after = self.identities();
-        let processes = by_pid
-            .into_iter()
-            .filter_map(|(pid, data)| {
-                let start = before.get(&pid)?;
-                (after.get(&pid) == Some(start)).then_some(((pid, *start), data))
-            })
-            .collect();
-        Ok(GpuAccountingData {
+        Ok(GpuMemoryData {
             system,
-            processes,
+            processes: self.access.join(before, rows, context)?,
             missing_process,
         })
     }
 }
-
+struct SmiProcessUtilization {
+    query: Query,
+    access: ProcessAccess,
+}
+impl Collector for SmiProcessUtilization {
+    type Data = ProcessGpuUtilizationData;
+    fn collect(&mut self, context: &OperationContext) -> Result<Self::Data> {
+        let before = self.access.identities(context)?;
+        let values = parse_process_utilization(&self.query.run(UTILIZATION_QUERY, context)?)?;
+        let missing_process = GpuUtilization {
+            source: "nvidia-smi/pmon/sm".into(),
+            error: Some("process is absent from pmon snapshot".into()),
+            ..Default::default()
+        };
+        let now = timestamp_ns();
+        let rows = values
+            .into_iter()
+            .map(|(pid, percent)| {
+                (
+                    pid,
+                    GpuUtilization {
+                        percent,
+                        observed_at_ns: percent.map(|_| now),
+                        error: percent
+                            .is_none()
+                            .then(|| "nvidia-smi process utilization N/A".into()),
+                        ..missing_process.clone()
+                    },
+                )
+            })
+            .collect();
+        Ok(ProcessGpuUtilizationData {
+            processes: self.access.join(before, rows, context)?,
+            missing_process,
+        })
+    }
+}
 fn available_query(
     capability: &Result<(), String>,
-    executable: &Path,
+    query: &Query,
     args: &[&str],
-    timeout: Duration,
+    context: &OperationContext,
 ) -> Result<String> {
     capability
         .as_ref()
         .map_err(|error| anyhow!(error.clone()))?;
-    command(executable, args, timeout)
+    query.run(args, context)
 }
-
 fn probe_values<T>(rows: BTreeMap<u32, Option<T>>) -> Result<()> {
-    // Empty tables cannot establish per-process support, but must remain enabled
-    // for processes that start later. Explicit N/A for all active rows can.
     ensure!(
         rows.is_empty() || rows.values().any(Option::is_some),
-        "nvidia-smi reports N/A for all active processes"
+        "all active process values are N/A"
     );
     Ok(())
 }
-
-// No shell is used. The timeout bounds a wedged driver/tool and output is capped.
-fn command(executable: &Path, args: &[&str], timeout: Duration) -> Result<String> {
-    const LIMIT: u64 = 4 * 1024 * 1024;
-    let mut child = Command::new(executable)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("cannot start {}", executable.display()))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .context("nvidia-smi stdout unavailable")?;
-    let result = (|| {
-        // Nonblocking reads keep the timeout effective even if an executable's
-        // descendant inherits stdout. There is no reader thread left to join.
-        let fd = stdout.as_raw_fd();
-        // fcntl acts on our owned pipe descriptor; no pointers are passed.
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        ensure!(flags >= 0, "cannot read stdout pipe flags");
-        let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-        ensure!(result >= 0, "cannot make stdout pipe nonblocking");
-        let start = Instant::now();
-        let mut bytes = Vec::new();
-        let mut buffer = [0u8; 8192];
-        loop {
-            ensure!(
-                start.elapsed() < timeout,
-                "nvidia-smi timed out after {} ms",
-                timeout.as_millis()
-            );
-            match stdout.read(&mut buffer) {
-                Ok(0) => {
-                    if let Some(status) = child.try_wait()? {
-                        ensure!(status.success(), "nvidia-smi query failed: {status}");
-                        return Ok(String::from_utf8(bytes)?);
-                    }
-                }
-                Ok(length) => {
-                    ensure!(
-                        bytes.len() as u64 + length as u64 <= LIMIT,
-                        "nvidia-smi output exceeds 4 MiB"
-                    );
-                    bytes.extend_from_slice(&buffer[..length]);
-                    continue;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error.into()),
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-    })();
-    if result.is_err() {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
-    result
+fn device_fields(text: &str, count: usize) -> Result<Vec<&str>> {
+    let rows: Vec<_> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    ensure!(rows.len() == 1, "expected one nvidia-smi device");
+    let fields: Vec<_> = rows[0].split(',').map(str::trim).collect();
+    ensure!(fields.len() == count, "invalid nvidia-smi device row");
+    ensure!(
+        !fields[0].is_empty() && !unsupported(fields[0]) && !fields[0].contains("nvgpu"),
+        "Orin nvidia-smi stub is not a GPU source"
+    );
+    Ok(fields)
 }
-
+fn parse_load(text: &str) -> Result<GpuData> {
+    let fields = device_fields(text, 2)?;
+    Ok(GpuData {
+        utilization_percent: percent(fields[1])?.context("system GPU utilization N/A")?,
+        source: "nvidia-smi/utilization.gpu".into(),
+        observed_at_ns: timestamp_ns(),
+    })
+}
+fn parse_memory(text: &str) -> Result<GpuMemory> {
+    let fields = device_fields(text, 3)?;
+    let total_bytes = mib(fields[1])?;
+    let used_bytes = mib(fields[2])?;
+    if let (Some(total), Some(used)) = (total_bytes, used_bytes) {
+        ensure!(used <= total, "GPU memory used exceeds total");
+    }
+    Ok(GpuMemory {
+        total_bytes,
+        used_bytes,
+        source: "nvidia-smi/memory.used,memory.total".into(),
+        scope: "device_gpu_allocation; shared physical RAM on Jetson".into(),
+        observed_at_ns: (used_bytes.is_some() || total_bytes.is_some()).then(timestamp_ns),
+        error: (used_bytes.is_none() || total_bytes.is_none())
+            .then(|| "nvidia-smi memory N/A".into()),
+    })
+}
 fn allocation(text: &str) -> Result<u64> {
     let (number, scale) = match text.as_bytes().last() {
         Some(b'K') => (&text[..text.len() - 1], 1024),
@@ -500,41 +472,6 @@ fn mib(text: &str) -> Result<Option<u64>> {
             .context("GPU memory overflow")?,
     ))
 }
-fn parse_device(text: &str) -> Result<GpuMetricsData> {
-    let rows: Vec<_> = text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    ensure!(rows.len() == 1, "expected one nvidia-smi device");
-    let fields: Vec<_> = rows[0].split(',').map(str::trim).collect();
-    ensure!(fields.len() == 4, "invalid nvidia-smi device row");
-    ensure!(
-        !fields[0].is_empty() && !unsupported(fields[0]) && !fields[0].contains("nvgpu"),
-        "Orin nvidia-smi stub is not a GPU accounting source"
-    );
-    let utilization = percent(fields[1])?;
-    let total = mib(fields[2])?;
-    let used = mib(fields[3])?;
-    if let (Some(total), Some(used)) = (total, used) {
-        ensure!(used <= total, "GPU memory used exceeds total");
-    }
-    let now = timestamp_ns();
-    Ok(GpuMetricsData {
-        utilization_percent: utilization,
-        memory_used_bytes: used,
-        memory_total_bytes: total,
-        utilization_source: "nvidia-smi/utilization.gpu".into(),
-        memory_source: "nvidia-smi/memory.used,memory.total".into(),
-        memory_scope: "device_gpu_allocation; shared physical RAM on Jetson".into(),
-        utilization_timestamp_ns: utilization.map(|_| now),
-        memory_timestamp_ns: (used.is_some() || total.is_some()).then_some(now),
-        utilization_error: utilization
-            .is_none()
-            .then(|| "nvidia-smi reports system utilization N/A".into()),
-        memory_error: (used.is_none() || total.is_none())
-            .then(|| "nvidia-smi reports memory.used or memory.total N/A".into()),
-    })
-}
 fn parse_process_memory(text: &str) -> Result<BTreeMap<u32, Option<u64>>> {
     let mut rows = BTreeMap::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
@@ -590,55 +527,18 @@ fn parse_process_utilization(text: &str) -> Result<BTreeMap<u32, Option<f64>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collectors::procfs::fake_stat;
-
-    #[test]
-    fn nvmap_units_names_and_reported_total_are_preserved() {
-        let (total, rows) = parse_nvmap("CLIENT PROCESS PID SIZE\nuser name with spaces 42 2K\nuser same-pid 42 1M\nuser other 43 1G\ntotal 7M\n").unwrap();
-        assert_eq!(total, 7 * MIB);
-        assert_eq!(rows[&42], 2 * 1024 + MIB);
-        assert_eq!(rows[&43], 1024 * MIB);
-        assert_ne!(total, rows.values().sum::<u64>());
-        for invalid in [
-            "",
-            "total 10K",
-            "CLIENT PROCESS PID SIZE\nuser x 42 10K",
-            "CLIENT PROCESS PID SIZE\ntotal invalid",
-            "CLIENT PROCESS PID SIZE\ntotal 18446744073709551615G",
-        ] {
-            assert!(parse_nvmap(invalid).is_err());
-        }
+    use std::{os::unix::fs::PermissionsExt, path::Path};
+    fn script(path: &Path, text: &str) {
+        fs::write(path, text).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
-
-    #[test]
-    fn smi_distinguishes_missing_zero_and_unsupported_sources() {
-        let system = parse_device("NVIDIA Thor, 42, [N/A], [N/A]\n").unwrap();
-        assert_eq!(system.utilization_percent, Some(42.0));
-        assert!(system.memory_used_bytes.is_none());
-        assert!(system.memory_error.is_some());
-        assert!(parse_device("Orin (nvgpu), 0, N/A, N/A").is_err());
-        assert!(parse_device("Thor, NaN, 100, 50").is_err());
-        assert!(parse_device("Thor, 101, 100, 50").is_err());
-        let rows = parse_process_memory("42, 0\n43, [N/A]\n44, 16").unwrap();
-        assert_eq!(rows[&42], Some(0));
-        assert_eq!(rows[&43], None);
-        assert_eq!(rows[&44], Some(16 * MIB));
-        let rows = parse_process_utilization("# gpu pid type sm mem enc dec command\n# Idx # C/G % % % % name\n0 42 C 0 - - - name with spaces\n0 43 C - - - - name\n").unwrap();
-        assert_eq!(rows[&42], Some(0.0));
-        assert_eq!(rows[&43], None);
-        assert!(parse_process_utilization("Not Supported").is_err());
-        assert!(
-            parse_process_utilization("# gpu pid type sm mem command\n0 - - - - -\n")
-                .unwrap()
-                .is_empty()
-        );
-        assert!(probe_values::<f64>(BTreeMap::new()).is_ok());
-        assert!(probe_values(BTreeMap::from([(42, None::<f64>)])).is_err());
-    }
-
-    fn fixture_process(root: &Path, start: u64) {
+    fn fixture(root: &Path, start: u64) {
         fs::create_dir_all(root.join("42")).unwrap();
-        fs::write(root.join("42/stat"), fake_stat(42, "compute", 0, start)).unwrap();
+        fs::write(
+            root.join("42/stat"),
+            super::super::procfs::fake_stat(42, "test", 1, start),
+        )
+        .unwrap();
     }
     fn selector() -> Option<Selector> {
         Some(Selector {
@@ -646,147 +546,133 @@ mod tests {
             names: vec![],
         })
     }
-    #[cfg(unix)]
-    fn script(path: &Path, text: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        fs::write(path, text).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-
     #[test]
-    fn nvmap_collects_fresh_process_allocations_and_never_sums_them_as_system_usage() {
-        let dir = tempfile::tempdir().unwrap();
-        fixture_process(dir.path(), 7);
-        let path = dir.path().join("clients");
-        fs::write(
-            &path,
-            "CLIENT PROCESS PID SIZE\nuser compute 42 1K\ntotal 2K",
-        )
-        .unwrap();
-        let mut collector = GpuAccountingCollector::probe(
-            path.clone(),
-            dir.path().join("missing-smi"),
-            Duration::from_secs(1),
-            dir.path().into(),
-            selector(),
-        )
-        .unwrap();
-        fs::write(
-            &path,
-            "CLIENT PROCESS PID SIZE\nuser compute 42 3K\nuser ignored 43 9K\ntotal 10K",
-        )
-        .unwrap();
-        let sample = collector.collect(&CollectContext::now()).unwrap();
-        assert_eq!(sample.system.memory_used_bytes, Some(10 * 1024));
-        assert_eq!(sample.processes.len(), 1);
-        let process = &sample.processes[&(42, 7)];
-        assert_eq!(process.memory_used_bytes, Some(3 * 1024));
-        assert!(process.utilization_percent.is_none());
-        assert!(process.utilization_error.as_ref().unwrap().contains("Orin"));
-        fs::write(&path, "invalid").unwrap();
-        assert!(collector.collect(&CollectContext::now()).is_err());
+    fn parsers_preserve_units_scopes_and_missing_values() {
+        let (total, rows) =
+            parse_nvmap("CLIENT PROCESS PID SIZE\nuser test 42 16K\ntotal 32K\n").unwrap();
+        assert_eq!(total, 32768);
+        assert_eq!(rows[&42], 16384);
+        assert_eq!(parse_load("Thor, 0").unwrap().utilization_percent, 0.0);
+        assert!(parse_load("nvgpu, 0").is_err());
+        assert!(parse_load("Thor, N/A").is_err());
+        assert!(parse_memory("Thor, 100, 101").is_err());
+        let memory = parse_memory("Thor, N/A, 10").unwrap();
+        assert!(memory.total_bytes.is_none());
+        assert_eq!(memory.used_bytes, Some(10 * MIB));
+        assert_eq!(parse_process_memory("42, N/A").unwrap()[&42], None);
+        assert!(probe_values::<u64>([(42, None)].into()).is_err());
+        assert!(probe_values::<u64>(BTreeMap::new()).is_ok());
     }
-
-    #[cfg(unix)]
     #[test]
-    fn thor_capabilities_are_probed_once_and_pid_reuse_during_queries_is_rejected() {
+    fn system_probe_failure_does_not_gate_process_capabilities_and_failures_are_not_retried() {
         let dir = tempfile::tempdir().unwrap();
-        fixture_process(dir.path(), 7);
-        let executable = dir.path().join("nvidia-smi");
+        fixture(dir.path(), 7);
+        let smi = dir.path().join("smi");
         script(
-            &executable,
-            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$0.calls\"\ncase \"$1\" in\n --query-gpu=*) echo 'Thor, 42, N/A, N/A';;\n --query-compute-apps=*)\n if [ -f \"$0.newstat\" ]; then mv \"$0.newstat\" \"${0%/*}/42/stat\"; fi\n echo '42, 16';;\n pmon) exit 3;;\n *) exit 9;;\nesac\n",
+            &smi,
+            "#!/bin/sh\necho \"$1\" >> \"$0.calls\"\ncase \"$1\" in\n --query-gpu=*) exit 1;;\n --query-compute-apps=*) echo '42, 12';;\n pmon) printf '# gpu pid type sm mem enc dec command\n0 42 C 25 - - - test\n';;\nesac\n",
         );
-        let collectors = GpuAccountingCollector::probe(
-            dir.path().join("no-nvmap"),
-            executable.clone(),
-            Duration::from_secs(1),
+        let mut sources = AccountingSources::probe(
+            dir.path().join("missing"),
+            smi.clone(),
+            Duration::from_millis(100),
             dir.path().into(),
             selector(),
-        )
-        .unwrap()
-        .split();
-        assert!(collectors.process_utilization.is_err());
-        let mut load = collectors.system_utilization.unwrap();
-        let mut collector = collectors.memory.unwrap();
+            true,
+            &OperationContext::now(),
+        );
+        assert!(sources.system_utilization.is_err());
+        assert!(sources.memory.is_ok());
+        assert!(sources.process_utilization.is_ok());
         for _ in 0..3 {
-            let sample = collector.collect(&CollectContext::now()).unwrap();
-            assert_eq!(
-                load.collect(&CollectContext::now())
-                    .unwrap()
-                    .utilization_percent,
-                42.0
-            );
-            assert!(sample.system.utilization_percent.is_none());
-            assert!(sample.system.memory_used_bytes.is_none());
-            let process = &sample.processes[&(42, 7)];
-            assert_eq!(process.memory_used_bytes, Some(16 * MIB));
-            assert!(process.utilization_percent.is_none());
-            assert!(process.utilization_error.is_some());
+            let memory = sources
+                .memory
+                .as_mut()
+                .unwrap()
+                .collect(&OperationContext::now())
+                .unwrap();
+            assert!(memory.system.used_bytes.is_none());
+            assert_eq!(memory.processes[&(42, 7)].value.used_bytes, Some(12 * MIB));
+            assert_eq!(memory.processes[&(42, 7)].name, "test");
+            let usage = sources
+                .process_utilization
+                .as_mut()
+                .unwrap()
+                .collect(&OperationContext::now())
+                .unwrap();
+            assert_eq!(usage.processes[&(42, 7)].value.percent, Some(25.0));
         }
-        let calls = fs::read_to_string(executable.with_extension("calls")).unwrap();
-        assert_eq!(calls.lines().filter(|line| *line == "pmon").count(), 1);
+        let calls = fs::read_to_string(smi.with_extension("calls")).unwrap();
         assert_eq!(
             calls
                 .lines()
-                .filter(|line| line.starts_with("--query-compute-apps"))
+                .filter(|line| line.starts_with("--query-gpu="))
                 .count(),
-            4
+            2
         );
-        fs::write(
-            executable.with_extension("newstat"),
-            fake_stat(42, "new", 0, 8),
-        )
-        .unwrap();
-        let sample = collector.collect(&CollectContext::now()).unwrap();
-        assert!(
-            sample.processes.is_empty(),
-            "PID changed during the driver query"
-        );
-        let sample = collector.collect(&CollectContext::now()).unwrap();
-        assert!(sample.processes.contains_key(&(42, 8)));
     }
-
-    #[cfg(unix)]
     #[test]
-    fn thor_keeps_process_and_system_utilization_separate_and_queries_time_out() {
+    fn pid_reuse_during_query_never_inherits_gpu_values() {
         let dir = tempfile::tempdir().unwrap();
-        fixture_process(dir.path(), 7);
-        let executable = dir.path().join("nvidia-smi");
+        fixture(dir.path(), 7);
+        let smi = dir.path().join("smi");
         script(
-            &executable,
-            "#!/bin/sh\ncase \"$1\" in\n --query-gpu=*) echo 'Thor, 42, 1000, 200';;\n --query-compute-apps=*) echo '42, 16';;\n pmon) printf '%s\\n' '# gpu pid type sm mem command' '0 42 C 8 - compute';;\nesac\n",
+            &smi,
+            "#!/bin/sh\ncase \"$1\" in\n --query-gpu=name,memory*) echo 'Thor, 100, 12';;\n --query-gpu=*) echo 'Thor, 10';;\n --query-compute-apps=*) echo '42, 12';;\n pmon) printf '# gpu pid type sm mem enc dec command\n0 42 C 25 - - - test\n';;\nesac\n",
         );
-        let collectors = GpuAccountingCollector::probe(
-            dir.path().join("no-nvmap"),
-            executable.clone(),
-            Duration::from_secs(1),
+        let mut sources = AccountingSources::probe(
+            dir.path().join("missing"),
+            smi.clone(),
+            Duration::from_millis(200),
             dir.path().into(),
             selector(),
+            true,
+            &OperationContext::now(),
+        );
+        let next_stat = super::super::procfs::fake_stat(42, "replacement", 2, 9);
+        script(
+            &smi,
+            &format!(
+                "#!/bin/sh\nprintf '%s' '{}' > '{}'/42/stat\nprintf '# gpu pid type sm mem enc dec command\\n0 42 C 25 - - - test\\n'\n",
+                next_stat,
+                dir.path().display()
+            ),
+        );
+        let sample = sources
+            .process_utilization
+            .as_mut()
+            .unwrap()
+            .collect(&OperationContext::now())
+            .unwrap();
+        assert!(sample.processes.is_empty());
+    }
+    #[test]
+    fn nvmap_system_total_is_not_sum_of_process_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path(), 7);
+        let clients = dir.path().join("clients");
+        fs::write(
+            &clients,
+            "CLIENT PROCESS PID SIZE\nuser test 42 16K\ntotal 64K\n",
         )
-        .unwrap()
-        .split();
-        let mut memory = collectors.memory.unwrap();
-        let mut utilization = collectors.process_utilization.unwrap();
-        let mut load = collectors.system_utilization.unwrap();
-        assert_eq!(
-            load.collect(&CollectContext::now())
-                .unwrap()
-                .utilization_percent,
-            42.0
+        .unwrap();
+        let mut sources = AccountingSources::probe(
+            clients,
+            dir.path().join("missing-smi"),
+            Duration::from_millis(100),
+            dir.path().into(),
+            selector(),
+            true,
+            &OperationContext::now(),
         );
-        let sample = memory.collect(&CollectContext::now()).unwrap();
-        assert_eq!(sample.system.memory_used_bytes, Some(200 * MIB));
-        assert!(sample.processes[&(42, 7)].utilization_percent.is_none());
-        let sample = utilization.collect(&CollectContext::now()).unwrap();
-        assert_eq!(sample.processes[&(42, 7)].utilization_percent, Some(8.0));
-        assert!(sample.system.memory_used_bytes.is_none());
-        script(&executable, "#!/bin/sh\nexec sleep 30\n");
-        assert!(
-            command(&executable, DEVICE_QUERY, Duration::from_millis(50))
-                .unwrap_err()
-                .to_string()
-                .contains("timed out")
-        );
+        let data = sources
+            .memory
+            .as_mut()
+            .unwrap()
+            .collect(&OperationContext::now())
+            .unwrap();
+        assert_eq!(data.system.used_bytes, Some(65536));
+        assert_eq!(data.processes[&(42, 7)].value.used_bytes, Some(16384));
+        assert!(data.system.scope.contains("not GPU-exclusive"));
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
     data::MemoryData,
-    framework::{CollectContext, Collector},
+    framework::{Collector, OperationContext},
 };
 use anyhow::{Context, Result, ensure};
 use std::{collections::HashMap, fs, path::PathBuf};
@@ -48,7 +48,8 @@ pub fn parse(text: &str) -> Result<MemoryData> {
 }
 impl Collector for MemoryCollector {
     type Data = MemoryData;
-    fn collect(&mut self, _: &CollectContext) -> Result<MemoryData> {
+    fn collect(&mut self, context: &OperationContext) -> Result<MemoryData> {
+        context.check()?;
         parse(&fs::read_to_string(&self.path)?)
     }
 }

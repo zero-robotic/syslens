@@ -1,33 +1,134 @@
-use super::{Sample, StreamDescriptor};
+//! Nonblocking fan-out. Each output owns delivery, overload, and failure policy.
+use super::{OperationContext, Sample, StreamDescriptor, control::Task};
 use anyhow::{Result, anyhow, ensure};
 use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        mpsc::{self, SyncSender, TrySendError},
-    },
-    thread::{self, JoinHandle},
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Condvar, Mutex},
+    time::{Duration, Instant},
 };
 
 pub trait Output: Send + 'static {
-    fn write(&mut self, sample: &Sample) -> Result<()>;
-    fn close(&mut self) -> Result<()>;
+    fn write(&mut self, sample: &Sample, context: &OperationContext) -> Result<()>;
+    fn close(&mut self, context: &OperationContext) -> Result<()>;
 }
-
+#[derive(Clone, Copy)]
+pub enum Delivery {
+    All,
+    Latest { interval: Duration },
+}
 #[derive(Clone, Copy)]
 pub enum Overflow {
-    Block,
+    Disable,
     DropNewest,
+    DropOldest,
 }
-
+#[derive(Clone, Copy)]
+pub enum FailurePolicy {
+    Isolate,
+    Stop,
+}
+#[derive(Clone, Copy)]
+pub struct OutputOptions {
+    pub capacity: usize,
+    pub delivery: Delivery,
+    pub overflow: Overflow,
+    pub failure: FailurePolicy,
+    pub operation_timeout: Duration,
+}
+#[derive(Default)]
+struct Pending {
+    queue: VecDeque<Arc<Sample>>,
+    closing: bool,
+    dropped: u64,
+    coalesced: u64,
+    failure: Option<String>,
+}
+struct Mailbox {
+    pending: Mutex<Pending>,
+    wake: Condvar,
+    options: OutputOptions,
+}
+impl Mailbox {
+    fn push(&self, sample: Arc<Sample>) {
+        let mut pending = self.pending.lock().unwrap();
+        if pending.closing {
+            return;
+        }
+        if matches!(self.options.delivery, Delivery::Latest { .. })
+            && let Some(existing) = pending
+                .queue
+                .iter_mut()
+                .find(|value| value.stream.topic == sample.stream.topic)
+        {
+            *existing = sample;
+            pending.coalesced += 1;
+            self.wake.notify_one();
+            return;
+        }
+        if pending.queue.len() == self.options.capacity {
+            pending.dropped += 1;
+            match self.options.overflow {
+                Overflow::Disable => {
+                    pending.closing = true;
+                    pending.failure = Some(
+                        "queue full; output disabled, accepted messages will be drained".into(),
+                    );
+                    self.wake.notify_one();
+                    return;
+                }
+                Overflow::DropNewest => return,
+                Overflow::DropOldest => {
+                    pending.queue.pop_front();
+                }
+            }
+        }
+        pending.queue.push_back(sample);
+        self.wake.notify_one();
+    }
+    fn next(
+        &self,
+        last: &HashMap<String, Instant>,
+        context: &super::control::Control,
+    ) -> Option<Arc<Sample>> {
+        let mut pending = self.pending.lock().unwrap();
+        loop {
+            if context.cancel.is_cancelled() {
+                return None;
+            }
+            let ready = pending.queue.iter().position(|sample| {
+                pending.closing
+                    || match self.options.delivery {
+                        Delivery::All => true,
+                        Delivery::Latest { interval } => last
+                            .get(&sample.stream.topic)
+                            .is_none_or(|time| time.elapsed() >= interval),
+                    }
+            });
+            if let Some(index) = ready {
+                return pending.queue.remove(index);
+            }
+            if pending.closing && pending.queue.is_empty() {
+                return None;
+            }
+            pending = self
+                .wake
+                .wait_timeout(pending, Duration::from_millis(5))
+                .unwrap()
+                .0;
+        }
+    }
+    fn close(&self) {
+        self.pending.lock().unwrap().closing = true;
+        self.wake.notify_all();
+    }
+}
 struct Worker {
     name: String,
-    sender: SyncSender<Arc<Sample>>,
-    handle: JoinHandle<Result<()>>,
-    policy: Overflow,
-    dropped: u64,
+    mailbox: Arc<Mailbox>,
+    task: Task,
+    failure: Option<String>,
+    reported_drops: u64,
 }
-
 #[derive(Default)]
 pub struct Dispatcher {
     workers: Vec<Worker>,
@@ -38,33 +139,56 @@ impl Dispatcher {
         &mut self,
         name: &str,
         mut output: impl Output,
-        capacity: usize,
-        policy: Overflow,
+        options: OutputOptions,
     ) -> Result<()> {
-        ensure!(capacity > 0, "output queue must not be empty");
-        let (sender, receiver) = mpsc::sync_channel::<Arc<Sample>>(capacity);
-        let handle = thread::Builder::new()
-            .name(format!("output-{name}"))
-            .spawn(move || {
-                let result = (|| {
-                    for sample in receiver {
-                        output.write(&sample)?;
-                    }
-                    Ok(())
-                })();
-                let close = output.close();
-                result.and(close)
-            })?;
+        ensure!(
+            options.capacity > 0 && !options.operation_timeout.is_zero(),
+            "invalid output limits"
+        );
+        if let Delivery::Latest { interval } = options.delivery {
+            ensure!(!interval.is_zero(), "live interval must be positive");
+        }
+        ensure!(
+            !self.workers.iter().any(|worker| worker.name == name),
+            "duplicate output {name}"
+        );
+        let mailbox = Arc::new(Mailbox {
+            pending: Mutex::new(Pending::default()),
+            wake: Condvar::new(),
+            options,
+        });
+        let inbox = mailbox.clone();
+        let task = Task::spawn(format!("output-{name}"), move |control| {
+            let mut last = HashMap::new();
+            let result = (|| {
+                while let Some(sample) = inbox.next(&last, &control) {
+                    let operation = control.operation(options.operation_timeout);
+                    operation.context.check()?;
+                    output.write(&sample, &operation.context)?;
+                    operation.context.check()?;
+                    last.insert(sample.stream.topic.clone(), Instant::now());
+                }
+                Ok(())
+            })();
+            inbox.close();
+            // close has its own bound, even after write fails or is cancelled.
+            let _close_operation = control.operation(options.operation_timeout);
+            let close_context =
+                OperationContext::new(super::Cancellation::default(), options.operation_timeout);
+            let closed = output
+                .close(&close_context)
+                .and_then(|_| close_context.check());
+            result.and(closed)
+        })?;
         self.workers.push(Worker {
             name: name.into(),
-            sender,
-            handle,
-            policy,
-            dropped: 0,
+            mailbox,
+            task,
+            failure: None,
+            reported_drops: 0,
         });
         Ok(())
     }
-
     pub fn publish(&mut self, mut sample: Sample) -> Result<()> {
         let entry = self
             .streams
@@ -78,182 +202,73 @@ impl Dispatcher {
         sample.sequence = entry.1;
         entry.1 = entry.1.wrapping_add(1);
         let sample = Arc::new(sample);
-        // Best-effort outputs are serviced before any lossless output applies backpressure.
-        for best_effort in [true, false] {
-            for worker in &mut self.workers {
-                if matches!(worker.policy, Overflow::DropNewest) != best_effort {
-                    continue;
-                }
-                match worker.policy {
-                    Overflow::Block => worker
-                        .sender
-                        .send(sample.clone())
-                        .map_err(|_| anyhow!("output {} failed", worker.name))?,
-                    Overflow::DropNewest => match worker.sender.try_send(sample.clone()) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => worker.dropped += 1,
-                        Err(TrySendError::Disconnected(_)) => {
-                            return Err(anyhow!("output {} failed", worker.name));
-                        }
-                    },
-                }
+        for worker in &self.workers {
+            worker.mailbox.push(sample.clone());
+        }
+        self.poll()
+    }
+    pub fn poll(&mut self) -> Result<()> {
+        for worker in &mut self.workers {
+            let error = worker
+                .task
+                .poll()
+                .map(str::to_string)
+                .or_else(|| worker.mailbox.pending.lock().unwrap().failure.clone());
+            if worker.failure.is_none()
+                && let Some(error) = error
+            {
+                eprintln!("output {}: {error}", worker.name);
+                worker.mailbox.close();
+                worker.failure = Some(error);
+            }
+            let dropped = worker.mailbox.pending.lock().unwrap().dropped;
+            if dropped > worker.reported_drops
+                && (worker.reported_drops == 0 || dropped / 100 > worker.reported_drops / 100)
+            {
+                eprintln!("output {}: {dropped} messages dropped", worker.name);
+                worker.reported_drops = dropped;
+            }
+            if matches!(worker.mailbox.options.failure, FailurePolicy::Stop)
+                && let Some(error) = &worker.failure
+            {
+                return Err(anyhow!("output {}: {error}", worker.name));
             }
         }
+        ensure!(
+            self.workers.is_empty() || self.workers.iter().any(|worker| worker.failure.is_none()),
+            "all outputs have failed"
+        );
         Ok(())
     }
-
-    pub fn finish(&mut self) -> Result<()> {
-        let mut failures = Vec::new();
-        for worker in self.workers.drain(..) {
-            drop(worker.sender);
-            if worker.dropped > 0 {
+    pub fn finish(&mut self, deadline: Instant) -> Result<()> {
+        for worker in &self.workers {
+            worker.mailbox.close();
+        }
+        let mut errors = Vec::new();
+        for mut worker in self.workers.drain(..) {
+            if let Err(error) = worker.task.finish(deadline) {
+                errors.push(format!("{error:#}"));
+            }
+            let pending = worker.mailbox.pending.lock().unwrap();
+            if let Some(error) = worker.failure.as_ref().or(pending.failure.as_ref()) {
+                errors.push(format!("{}: {error}", worker.name));
+            }
+            if pending.dropped > 0 {
                 eprintln!(
-                    "{}: skipped {} live messages (queue full)",
-                    worker.name, worker.dropped
+                    "output {}: {} messages dropped",
+                    worker.name, pending.dropped
                 );
             }
-            match worker.handle.join() {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => failures.push(format!("{}: {error:#}", worker.name)),
-                Err(_) => failures.push(format!("{}: worker panicked", worker.name)),
-            }
         }
-        ensure!(failures.is_empty(), "{}", failures.join("; "));
+        ensure!(errors.is_empty(), "{}", errors.join("; "));
         Ok(())
     }
 }
 impl Drop for Dispatcher {
     fn drop(&mut self) {
-        let _ = self.finish();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bytes::Bytes;
-    use std::{
-        sync::{
-            Mutex,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::Duration,
-    };
-
-    fn sample() -> Sample {
-        Sample {
-            stream: Arc::new(StreamDescriptor {
-                topic: "/test".into(),
-                message_encoding: "test".into(),
-                schema_name: "test".into(),
-                schema_encoding: "test".into(),
-                schema: Bytes::new(),
-            }),
-            captured_at_ns: 1,
-            sequence: 0,
-            payload: Bytes::from_static(b"data"),
+        for worker in &self.workers {
+            worker.mailbox.close();
+            worker.task.control.cancel.cancel();
         }
-    }
-    struct SlowOutput {
-        first: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
-        samples: Arc<Mutex<Vec<Sample>>>,
-    }
-    impl Output for SlowOutput {
-        fn write(&mut self, sample: &Sample) -> Result<()> {
-            if let Some((entered, release)) = self.first.take() {
-                entered.send(()).unwrap();
-                release.recv_timeout(Duration::from_secs(5)).unwrap();
-            }
-            self.samples.lock().unwrap().push(sample.clone());
-            Ok(())
-        }
-        fn close(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-    #[test]
-    fn bounded_live_queue_drops_without_losing_recorded_messages() {
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let live = Arc::new(Mutex::new(Vec::new()));
-        let recording = Arc::new(Mutex::new(Vec::new()));
-        let mut dispatcher = Dispatcher::default();
-        dispatcher
-            .add(
-                "live",
-                SlowOutput {
-                    first: Some((entered_tx, release_rx)),
-                    samples: live.clone(),
-                },
-                1,
-                Overflow::DropNewest,
-            )
-            .unwrap();
-        dispatcher
-            .add(
-                "record",
-                SlowOutput {
-                    first: None,
-                    samples: recording.clone(),
-                },
-                1,
-                Overflow::Block,
-            )
-            .unwrap();
-        dispatcher.publish(sample()).unwrap();
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        dispatcher.publish(sample()).unwrap();
-        dispatcher.publish(sample()).unwrap();
-        assert_eq!(dispatcher.workers[0].dropped, 1);
-        let mut conflict = sample();
-        Arc::get_mut(&mut conflict.stream).unwrap().schema_name = "another".into();
-        assert!(dispatcher.publish(conflict).is_err());
-        release_tx.send(()).unwrap();
-        dispatcher.finish().unwrap();
-        let live = live.lock().unwrap();
-        let recording = recording.lock().unwrap();
-        assert_eq!(live.len(), 2);
-        assert_eq!(recording.len(), 3);
-        for index in 0..2 {
-            // Both outputs receive the same allocation, not separately encoded payloads.
-            assert_eq!(
-                live[index].payload.as_ptr(),
-                recording[index].payload.as_ptr()
-            );
-        }
-        assert_eq!(
-            recording
-                .iter()
-                .map(|sample| sample.sequence)
-                .collect::<Vec<_>>(),
-            vec![0, 1, 2]
-        );
-    }
-    struct FailedOutput(Arc<AtomicBool>);
-    impl Output for FailedOutput {
-        fn write(&mut self, _: &Sample) -> Result<()> {
-            anyhow::bail!("disk full")
-        }
-        fn close(&mut self) -> Result<()> {
-            self.0.store(true, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-    #[test]
-    fn output_failure_is_reported_and_close_still_runs() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let mut dispatcher = Dispatcher::default();
-        dispatcher
-            .add("record", FailedOutput(closed.clone()), 1, Overflow::Block)
-            .unwrap();
-        dispatcher.publish(sample()).unwrap();
-        assert!(
-            dispatcher
-                .finish()
-                .unwrap_err()
-                .to_string()
-                .contains("disk full")
-        );
-        assert!(closed.load(Ordering::Relaxed));
     }
 }

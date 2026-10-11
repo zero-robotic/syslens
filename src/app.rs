@@ -2,15 +2,20 @@ use crate::{
     assemblers::{GpuInputs, Identity, ProcessAssembler, SystemAssembler},
     collectors::{
         cpu::CpuCollector,
-        gpu::JetsonCollector,
-        gpu_accounting::GpuAccountingCollector,
+        gpu_sources::{GpuSettings, GpuSources},
         memory::MemoryCollector,
         process::{ProcessCollector, ProcessMemoryCollector, Selector},
         threads::ThreadCollector,
     },
     config::{Cli, Config},
-    data::{CpuData, GpuAccountingData, GpuData, MemoryData, ProcessMemory, Processes, Threads},
-    framework::{Dispatcher, Key, Overflow, Runtime, Schedule},
+    data::{
+        CpuData, GpuData, GpuMemoryData, MemoryData, ProcessGpuUtilizationData, ProcessMemory,
+        Processes, Threads,
+    },
+    framework::{
+        Cancellation, Delivery, Dispatcher, Key, OutputOptions, Runtime, RuntimeOptions, Schedule,
+        run_bounded,
+    },
     outputs::{foxglove::FoxgloveOutput, mcap::McapOutput},
 };
 use anyhow::{Result, ensure};
@@ -51,8 +56,15 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         dispatcher.add(
             "foxglove",
             FoxgloveOutput::new(&config.foxglove.bind, config.foxglove.port)?,
-            config.foxglove.queue_capacity,
-            Overflow::DropNewest,
+            OutputOptions {
+                capacity: config.foxglove.queue_capacity,
+                delivery: Delivery::Latest {
+                    interval: Duration::from_millis(config.interval_ms),
+                },
+                overflow: config.foxglove.overflow.into(),
+                failure: config.foxglove.on_failure.into(),
+                operation_timeout: Duration::from_millis(config.foxglove.operation_timeout_ms),
+            },
         )?;
     }
     if config.recording.enabled {
@@ -64,13 +76,31 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 Duration::from_millis(config.recording.flush_ms),
                 config.recording.rotate_payload_bytes,
             )?,
-            config.recording.queue_capacity,
-            Overflow::Block,
+            OutputOptions {
+                capacity: config.recording.queue_capacity,
+                delivery: Delivery::All,
+                overflow: config.recording.overflow.into(),
+                failure: config.recording.on_failure.into(),
+                operation_timeout: Duration::from_millis(config.recording.operation_timeout_ms),
+            },
         )?;
     }
-    let mut runtime = Runtime::new(dispatcher);
+    let mut runtime = Runtime::new(
+        dispatcher,
+        RuntimeOptions {
+            ingress_capacity: config.runtime.observation_queue_capacity,
+            ingress_timeout: Duration::from_millis(config.runtime.enqueue_timeout_ms),
+            shutdown_timeout: Duration::from_millis(config.runtime.shutdown_timeout_ms),
+        },
+    )?;
     let sampling = &config.sampling;
-    let schedule = |ms| Schedule::new(Duration::from_millis(ms), sampling.stale_after_periods);
+    let schedule = |ms| {
+        Schedule::new(
+            Duration::from_millis(ms),
+            sampling.stale_after_periods,
+            Duration::from_millis(config.runtime.collection_timeout_ms),
+        )
+    };
     let cpu = Key::<CpuData>::new("cpu");
     let memory = Key::<MemoryData>::new("memory");
     runtime.add_collector(
@@ -88,105 +118,58 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         names: config.processes.names,
     };
     let gpu = if config.gpu.enabled {
-        let mut inputs = GpuInputs::default();
-        match JetsonCollector::probe(
-            &config.gpu.sys_root,
-            config.gpu.load_path,
-            config.gpu.tegrastats,
-            Duration::from_millis(config.gpu.timeout_ms),
-            Duration::from_millis(sampling.gpu_utilization_ms),
-        ) {
-            Ok(collector) => {
-                let key = Key::<GpuData>::new("gpu_utilization");
-                runtime.add_collector(key, collector, schedule(sampling.gpu_utilization_ms)?)?;
-                inputs.utilization = Some(key);
-            }
-            Err(error) => {
-                eprintln!(
-                    "Jetson sysfs/tegrastats disabled for this run (startup probe failed): {error:#}"
-                );
-                inputs.utilization_error = Some(format!("{error:#}"));
-            }
-        }
-        match GpuAccountingCollector::probe(
-            config
-                .gpu
-                .nvmap_clients_path
-                .unwrap_or_else(|| config.gpu.sys_root.join("kernel/debug/nvmap/iovmm/clients")),
-            config.gpu.nvidia_smi,
-            Duration::from_millis(config.gpu.timeout_ms),
-            config.proc_root.clone(),
-            config.processes.enabled.then(|| selector.clone()),
-        ) {
-            Ok(collector) => {
-                let collectors = collector.split();
-                if inputs.utilization.is_none() {
-                    match collectors.system_utilization {
-                        Ok(collector) => {
-                            let key = Key::<GpuData>::new("gpu_utilization");
-                            runtime.add_collector(
-                                key,
-                                collector,
-                                schedule(sampling.gpu_utilization_ms)?,
-                            )?;
-                            inputs.utilization = Some(key);
-                            inputs.utilization_error = None;
-                        }
-                        Err(error) => {
-                            inputs.utilization_error = Some(format!(
-                                "{}; {error}",
-                                inputs.utilization_error.unwrap_or_default()
-                            ));
-                        }
-                    }
-                }
-                match collectors.memory {
-                    Ok(collector) => {
-                        let key = Key::<GpuAccountingData>::new("gpu_memory");
-                        runtime.add_collector(key, collector, schedule(sampling.gpu_memory_ms)?)?;
-                        inputs.accounting = Some(key);
-                    }
-                    Err(error) => {
-                        eprintln!("GPU memory disabled for this run: {error}");
-                        inputs.accounting_error = Some(error);
-                    }
-                }
-                if config.processes.enabled {
-                    match collectors.process_utilization {
-                        Ok(collector) => {
-                            let key = Key::<GpuAccountingData>::new("process_gpu_utilization");
-                            runtime.add_collector(
-                                key,
-                                collector,
-                                schedule(sampling.process_gpu_utilization_ms)?,
-                            )?;
-                            inputs.process_utilization = Some(key);
-                        }
-                        Err(error) => {
-                            eprintln!("Process GPU utilization disabled for this run: {error}");
-                            inputs.process_utilization_error = Some(error);
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                eprintln!(
-                    "Jetson GPU accounting disabled for this run (startup probe failed): {error:#}"
-                );
-                inputs.accounting_error = Some(format!("{error:#}"));
-                inputs.process_utilization_error = Some(format!("{error:#}"));
-            }
+        let settings = GpuSettings {
+            sys_root: config.gpu.sys_root,
+            load_path: config.gpu.load_path,
+            tegrastats: config.gpu.tegrastats,
+            nvmap_clients_path: config.gpu.nvmap_clients_path,
+            nvidia_smi: config.gpu.nvidia_smi,
+            timeout: Duration::from_millis(config.gpu.timeout_ms),
+            utilization_interval: Duration::from_millis(sampling.gpu_utilization_ms),
+        };
+        let proc_root = config.proc_root.clone();
+        let process_selector = config.processes.enabled.then(|| selector.clone());
+        let sources = run_bounded(
+            "gpu-probe",
+            Duration::from_millis(config.runtime.startup_timeout_ms),
+            Duration::from_millis(config.runtime.shutdown_timeout_ms),
+            Cancellation::from_flag(stop.clone()),
+            move |context| {
+                Ok(GpuSources::probe(
+                    settings,
+                    proc_root,
+                    process_selector,
+                    context,
+                ))
+            },
+        )?;
+        let inputs = GpuInputs {
+            utilization: Key::<GpuData>::new("gpu_utilization"),
+            memory: Key::<GpuMemoryData>::new("gpu_memory"),
+            process_utilization: Key::<ProcessGpuUtilizationData>::new("process_gpu_utilization"),
+        };
+        runtime.add_capability(
+            inputs.utilization,
+            sources.utilization,
+            schedule(sampling.gpu_utilization_ms)?,
+        )?;
+        runtime.add_capability(
+            inputs.memory,
+            sources.memory,
+            schedule(sampling.gpu_memory_ms)?,
+        )?;
+        if config.processes.enabled {
+            runtime.add_capability(
+                inputs.process_utilization,
+                sources.process_utilization,
+                schedule(sampling.process_gpu_utilization_ms)?,
+            )?;
         }
         Some(inputs)
     } else {
         None
     };
-    runtime.add_assembler(SystemAssembler::new(
-        cpu,
-        memory,
-        gpu.clone(),
-        identity.clone(),
-    ))?;
+    runtime.add_assembler(SystemAssembler::new(cpu, memory, gpu, identity.clone()))?;
     if config.processes.enabled {
         let key = Key::<Processes>::new("process_cpu");
         runtime.add_collector(
@@ -219,11 +202,17 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             identity,
         ))?;
     }
-    runtime.run(
-        Duration::from_millis(config.interval_ms),
-        config.samples,
-        stop,
-    )
+    let duration = config
+        .samples
+        .map(|count| {
+            config
+                .interval_ms
+                .checked_mul(count)
+                .map(Duration::from_millis)
+                .ok_or_else(|| anyhow::anyhow!("run duration overflow"))
+        })
+        .transpose()?;
+    runtime.run(duration, stop)
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -231,167 +220,130 @@ mod tests {
     use super::*;
     use crate::protocol::pb;
     use prost::Message;
-
+    fn messages(directory: &std::path::Path) -> (Vec<pb::SystemSample>, Vec<pb::ProcessSample>) {
+        let mut systems = Vec::new();
+        let mut processes = Vec::new();
+        for file in fs::read_dir(directory).unwrap() {
+            let bytes = fs::read(file.unwrap().path()).unwrap();
+            assert!(mcap::Summary::read(&bytes).unwrap().is_some());
+            for message in mcap::MessageStream::new(&bytes).unwrap() {
+                let message = message.unwrap();
+                match message.channel.topic.as_str() {
+                    "/syslens/system" => {
+                        let sample = pb::SystemSample::decode(message.data.as_ref()).unwrap();
+                        let timestamp = sample.header.as_ref().unwrap().timestamp.as_ref().unwrap();
+                        assert_eq!(
+                            message.log_time,
+                            timestamp.seconds as u64 * 1_000_000_000 + timestamp.nanos as u64
+                        );
+                        systems.push(sample);
+                    }
+                    "/syslens/processes" => {
+                        processes.push(pb::ProcessSample::decode(message.data.as_ref()).unwrap())
+                    }
+                    other => panic!("unexpected topic {other}"),
+                }
+            }
+        }
+        (systems, processes)
+    }
     #[test]
-    fn unavailable_gpu_is_probed_once_and_does_not_block_other_messages() {
+    fn unavailable_gpu_is_probed_once_and_typed_status_remains_visible() {
         use std::os::unix::fs::PermissionsExt;
-
         for enabled in [true, false] {
-            let directory = tempfile::tempdir().unwrap();
-            let executable = directory.path().join("tegrastats");
-            // The executable exists but never reports valid GPU data.
-            fs::write(&executable, "#!/bin/sh\nprintf 'started\\n' >> \"$0.starts\"\nwhile :; do\n  printf '%s\\n' 'GR3D_FREQ @[1098,1098]'\n  sleep 0.02\ndone\n").unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let executable = dir.path().join("tegrastats");
+            fs::write(
+                &executable,
+                "#!/bin/sh\necho started >> \"$0.starts\"\necho invalid\n",
+            )
+            .unwrap();
             fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
             let mut config = Config {
                 samples: Some(3),
-                interval_ms: 10,
+                interval_ms: 50,
                 ..Default::default()
             };
             config.foxglove.enabled = false;
-            config.recording.directory = directory.path().join("recordings");
+            config.recording.directory = dir.path().join("recordings");
             config.processes.pids = vec![std::process::id()];
             config.gpu.enabled = enabled;
-            config.gpu.sys_root = directory.path().join("no-sysfs");
+            config.gpu.sys_root = dir.path().join("missing-sysfs");
             config.gpu.tegrastats = executable;
-            config.gpu.nvidia_smi = directory.path().join("no-nvidia-smi");
-            config.gpu.timeout_ms = 1000;
-
+            config.gpu.nvidia_smi = dir.path().join("missing-smi");
+            config.gpu.timeout_ms = 100;
             run_config(config, Arc::new(AtomicBool::new(false))).unwrap();
-            let starts = directory.path().join("tegrastats.starts");
             if enabled {
-                assert_eq!(fs::read_to_string(starts).unwrap(), "started\n");
+                assert_eq!(
+                    fs::read_to_string(dir.path().join("tegrastats.starts")).unwrap(),
+                    "started\n"
+                );
             } else {
-                assert!(!starts.exists(), "disabled GPU must not be probed");
+                assert!(!dir.path().join("tegrastats.starts").exists());
             }
-            let file = fs::read_dir(directory.path().join("recordings"))
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()
-                .path();
-            let bytes = fs::read(file).unwrap();
-            let mut counts = std::collections::HashMap::new();
-            for message in mcap::MessageStream::new(&bytes).unwrap() {
-                let message = message.unwrap();
-                *counts.entry(message.channel.topic.clone()).or_insert(0) += 1;
+            let (systems, processes) = messages(&dir.path().join("recordings"));
+            assert!(!systems.is_empty() && !processes.is_empty());
+            for system in systems {
+                assert_eq!(system.gpu.is_some(), enabled);
+                if enabled {
+                    assert!(system.gpu.unwrap().utilization_error.is_some());
+                    let header = system.header.unwrap();
+                    assert!(
+                        header
+                            .inputs
+                            .iter()
+                            .any(|input| input.collector == "gpu_utilization"
+                                && input.error.is_some())
+                    );
+                }
             }
-            assert_eq!(counts.len(), 2);
-            assert_eq!(counts["/syslens/system"], 3);
-            assert_eq!(counts["/syslens/processes"], 3);
-            assert!(!counts.contains_key("/syslens/gpu"));
         }
     }
-
     #[test]
-    fn real_linux_processes_and_fixture_jetson_reach_finalized_mcap() {
-        let directory = tempfile::tempdir().unwrap();
-        let load = directory.path().join("gpu-load");
-        fs::write(&load, "375\n").unwrap();
-        let mut config = Config {
-            samples: Some(4),
-            interval_ms: 100,
-            ..Default::default()
-        };
-        config.foxglove.enabled = false;
-        config.recording.directory = directory.path().join("recordings");
-        config.gpu.load_path = Some(load);
-        config.gpu.nvidia_smi = directory.path().join("no-nvidia-smi");
-        let nvmap = directory.path().join("clients");
+    fn real_linux_observations_keep_sequences_identity_and_gpu_data_in_finalized_mcap() {
+        let dir = tempfile::tempdir().unwrap();
+        let load = dir.path().join("load");
+        let clients = dir.path().join("clients");
+        fs::write(&load, "375").unwrap();
         fs::write(
-            &nvmap,
+            &clients,
             format!(
                 "CLIENT PROCESS PID SIZE\nuser syslens {} 16K\ntotal 32K\n",
                 std::process::id()
             ),
         )
         .unwrap();
-        config.gpu.nvmap_clients_path = Some(nvmap);
+        let mut config = Config {
+            samples: Some(4),
+            interval_ms: 100,
+            ..Default::default()
+        };
+        config.foxglove.enabled = false;
+        config.recording.directory = dir.path().join("recordings");
+        config.gpu.load_path = Some(load);
+        config.gpu.nvmap_clients_path = Some(clients);
+        config.gpu.nvidia_smi = dir.path().join("missing-smi");
         config.processes.pids = vec![std::process::id()];
-        config.sampling.system_cpu_ms = 30;
-        config.sampling.system_memory_ms = 110;
-        config.sampling.process_cpu_ms = 40;
-        config.sampling.process_memory_ms = 130;
-        config.sampling.thread_cpu_ms = 50;
-        config.sampling.gpu_utilization_ms = 60;
-        config.sampling.gpu_memory_ms = 5000;
-        let busy_stop = Arc::new(AtomicBool::new(false));
-        let busy_signal = busy_stop.clone();
+        config.sampling.system_cpu_ms = 20;
+        config.sampling.process_cpu_ms = 30;
+        config.sampling.process_memory_ms = 70;
+        config.sampling.thread_cpu_ms = 40;
+        config.sampling.gpu_memory_ms = 1000;
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = stop.clone();
         let busy = std::thread::spawn(move || {
-            while !busy_signal.load(Ordering::Relaxed) {
+            while !signal.load(Ordering::Relaxed) {
                 std::hint::black_box((0..1000u64).sum::<u64>());
-                std::hint::spin_loop();
             }
         });
         let result = run_config(config, Arc::new(AtomicBool::new(false)));
-        busy_stop.store(true, Ordering::Relaxed);
+        stop.store(true, Ordering::Relaxed);
         busy.join().unwrap();
         result.unwrap();
-        let file = fs::read_dir(directory.path().join("recordings"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        let bytes = fs::read(file).unwrap();
-        let summary = mcap::Summary::read(&bytes).unwrap().unwrap();
-        assert_eq!(summary.stats.unwrap().message_count, 8);
-        let mut systems = Vec::new();
-        let mut processes = Vec::new();
-        for message in mcap::MessageStream::new(&bytes).unwrap() {
-            let message = message.unwrap();
-            match message.channel.topic.as_str() {
-                "/syslens/system" => {
-                    systems.push(pb::SystemSample::decode(message.data.as_ref()).unwrap())
-                }
-                "/syslens/processes" => {
-                    processes.push(pb::ProcessSample::decode(message.data.as_ref()).unwrap())
-                }
-                topic => panic!("unexpected topic {topic}"),
-            }
-        }
-        assert_eq!((systems.len(), processes.len()), (4, 4));
-        for (name, interval) in [
-            ("cpu", 30),
-            ("memory", 110),
-            ("gpu_utilization", 60),
-            ("gpu_memory", 5000),
-        ] {
-            let input = systems
-                .last()
-                .unwrap()
-                .header
-                .as_ref()
-                .unwrap()
-                .inputs
-                .iter()
-                .find(|input| input.collector == name)
-                .unwrap();
-            assert_eq!(input.interval_ms, interval);
-            assert!(input.collection_duration_ms.is_some());
-            assert!(input.age_ms.is_some());
-            assert!(!input.stale);
-        }
-        for (name, interval) in [
-            ("process_cpu", 40),
-            ("process_memory", 130),
-            ("thread_cpu", 50),
-        ] {
-            let input = processes
-                .last()
-                .unwrap()
-                .header
-                .as_ref()
-                .unwrap()
-                .inputs
-                .iter()
-                .find(|input| input.collector == name)
-                .unwrap();
-            assert_eq!(input.interval_ms, interval);
-            assert!(input.actual_interval_ms.is_some());
-            assert!(input.sample_sequence >= 2);
-        }
-        let gpu_memory_sequences: Vec<_> = systems
+        let (systems, processes) = messages(&dir.path().join("recordings"));
+        let cpu_sequences: Vec<_> = systems
             .iter()
+            .filter(|sample| sample.header.as_ref().unwrap().trigger_input == "cpu")
             .map(|sample| {
                 sample
                     .header
@@ -399,75 +351,53 @@ mod tests {
                     .unwrap()
                     .inputs
                     .iter()
-                    .find(|input| input.collector == "gpu_memory")
+                    .find(|input| input.collector == "cpu")
                     .unwrap()
                     .sample_sequence
             })
             .collect();
-        assert_eq!(
-            gpu_memory_sequences,
-            vec![1; 4],
-            "slow inputs should be reused with their original sequence"
+        assert!(
+            cpu_sequences.len() > 4,
+            "recording incorrectly limited by live interval"
         );
-        assert!(systems[1..].iter().any(|system| {
-            system
-                .cpu
+        assert_eq!(
+            cpu_sequences,
+            (1..=cpu_sequences.len() as u64).collect::<Vec<_>>()
+        );
+        assert!(systems.iter().any(|s| {
+            s.cpu
                 .as_ref()
                 .is_some_and(|cpu| cpu.usage_percent.is_some())
         }));
-        assert!(!systems[0].cpu.as_ref().unwrap().cores.is_empty());
-        assert!(systems[0].memory.as_ref().unwrap().total_bytes > 0);
-        for (index, process_sample) in processes.iter().enumerate() {
-            assert_eq!(process_sample.processes.len(), 1);
-            let process = &process_sample.processes[0];
-            assert_eq!(process.pid, std::process::id());
-            assert!(process.rss_bytes.unwrap_or_default() > 0);
-            assert!(!process.threads.is_empty());
-            // Other test-runner threads may exit between directory listing and stat reads.
-            if let Some(error) = &process.threads_error {
-                assert!(
-                    error.ends_with("threads exited or were unreadable"),
-                    "{error}"
-                );
-            }
-            assert_eq!(
-                process_sample.header.as_ref().unwrap().batch_id,
-                index as u64
-            );
+        assert!(systems.iter().any(|s| {
+            s.gpu.as_ref().is_some_and(|gpu| {
+                gpu.utilization_percent == Some(37.5)
+                    && gpu.memory_used_bytes == Some(32 * 1024)
+                    && gpu.memory_total_bytes.is_none()
+            })
+        }));
+        assert!(
+            processes
+                .iter()
+                .flat_map(|sample| &sample.processes)
+                .any(|p| p.cpu_percent.unwrap_or_default() > 0.0)
+        );
+        assert!(
+            processes
+                .iter()
+                .flat_map(|sample| &sample.processes)
+                .any(|p| p.rss_bytes.unwrap_or_default() > 0
+                    && !p.threads.is_empty()
+                    && p.gpu
+                        .as_ref()
+                        .is_some_and(|gpu| gpu.memory_used_bytes == Some(16 * 1024)))
+        );
+        for p in processes.iter().flat_map(|sample| &sample.processes) {
+            assert_eq!(p.pid, std::process::id());
             assert!(
-                process_sample
-                    .header
-                    .as_ref()
-                    .unwrap()
-                    .inputs
-                    .iter()
-                    .all(|input| input.error.is_none())
-            );
-            let system_gpu = systems[index].gpu.as_ref().unwrap();
-            assert_eq!(system_gpu.utilization_percent, Some(37.5));
-            assert_eq!(system_gpu.memory_used_bytes, Some(32 * 1024));
-            assert!(system_gpu.memory_total_bytes.is_none());
-            let process_gpu = process.gpu.as_ref().unwrap();
-            assert_eq!(process_gpu.memory_used_bytes, Some(16 * 1024));
-            assert!(process_gpu.utilization_percent.is_none());
-            assert!(
-                process_gpu
-                    .utilization_error
-                    .as_ref()
-                    .unwrap()
-                    .contains("Orin")
+                p.instance_id
+                    .ends_with(&format!(":{}:{}", p.pid, p.start_ticks))
             );
         }
-        assert!(
-            processes[1..]
-                .iter()
-                .any(|sample| sample.processes[0].cpu_percent.unwrap_or(0.0) > 0.0)
-        );
-        assert!(
-            processes[1..]
-                .iter()
-                .flat_map(|sample| &sample.processes[0].threads)
-                .any(|thread| thread.cpu_percent.unwrap_or(0.0) > 0.0)
-        );
     }
 }

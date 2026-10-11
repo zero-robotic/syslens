@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use std::{
-    any::Any,
+    any::{Any, TypeId, type_name},
     collections::HashMap,
     marker::PhantomData,
     sync::Arc,
@@ -14,7 +14,12 @@ pub fn timestamp_ns() -> u64 {
         .as_nanos()
         .min(u64::MAX as u128) as u64
 }
-
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dependency {
+    pub name: &'static str,
+    pub(super) type_id: TypeId,
+    pub(super) type_name: &'static str,
+}
 pub struct Key<T> {
     pub name: &'static str,
     marker: PhantomData<fn() -> T>,
@@ -25,39 +30,49 @@ impl<T> Clone for Key<T> {
         *self
     }
 }
-impl<T> Key<T> {
+impl<T: 'static> Key<T> {
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
             marker: PhantomData,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-pub struct CollectContext {
-    pub captured_at_ns: u64,
-}
-impl CollectContext {
-    pub fn now() -> Self {
-        Self {
-            captured_at_ns: timestamp_ns(),
+    pub fn dependency(self) -> Dependency {
+        Dependency {
+            name: self.name,
+            type_id: TypeId::of::<T>(),
+            type_name: type_name::<T>(),
         }
     }
 }
-
 pub(super) struct Entry {
+    pub input: Dependency,
     pub captured_at_ns: u64,
     pub started: Instant,
+    pub completed: Instant,
     pub interval: Duration,
     pub max_age: Duration,
     pub actual_interval: Option<Duration>,
-    pub duration: Duration,
     pub sequence: u64,
     pub missed_periods: u64,
     pub result: Result<Box<dyn Any + Send + Sync>, String>,
 }
-
+impl Entry {
+    pub fn unavailable(input: Dependency, error: String) -> Self {
+        Self {
+            input,
+            captured_at_ns: 0,
+            started: Instant::now(),
+            completed: Instant::now(),
+            interval: Duration::ZERO,
+            max_age: Duration::MAX,
+            actual_interval: None,
+            sequence: 0,
+            missed_periods: 0,
+            result: Err(error),
+        }
+    }
+}
 pub struct InputStatus {
     pub captured_at_ns: Option<u64>,
     pub error: Option<String>,
@@ -68,40 +83,51 @@ pub struct InputStatus {
     pub stale: bool,
     pub sample_sequence: u64,
     pub missed_periods: u64,
-    pub skipped_samples: u64,
 }
-
+/// One observation triggers a view of its declared dependencies. Retained inputs
+/// are evaluated as of this observation, not as of a later output/flush time.
 pub struct Batch {
     pub id: u64,
     pub captured_at_ns: u64,
+    pub trigger: &'static str,
     pub(super) observed_at: Instant,
     pub(super) entries: HashMap<&'static str, Arc<Entry>>,
-    pub(super) skipped_samples: HashMap<&'static str, u64>,
 }
 impl Batch {
-    pub fn get<T: Send + Sync + 'static>(&self, key: Key<T>) -> Result<&T> {
+    /// Unavailable/stale measurements are expected; wiring/type errors are not.
+    pub fn read<T: Send + Sync + 'static>(&self, key: Key<T>) -> Result<Option<&T>> {
         let entry = self
             .entries
             .get(key.name)
-            .with_context(|| format!("missing input {}", key.name))?;
-        let data = entry
-            .result
-            .as_ref()
-            .map_err(|error| anyhow!("{}: {error}", key.name))?;
-        if self.observed_at.saturating_duration_since(entry.started) > entry.max_age {
-            return Err(anyhow!("stale input {}", key.name));
+            .ok_or_else(|| anyhow!("undeclared input {}", key.name))?;
+        ensure!(
+            entry.input.type_id == TypeId::of::<T>(),
+            "input type mismatch for {}: registered {}, requested {}",
+            key.name,
+            entry.input.type_name,
+            type_name::<T>()
+        );
+        if key.name != self.trigger
+            && self.observed_at.saturating_duration_since(entry.completed) > entry.max_age
+        {
+            return Ok(None);
         }
-        data.downcast_ref::<T>()
-            .with_context(|| format!("input type mismatch for {}", key.name))
+        match &entry.result {
+            Ok(data) => data
+                .downcast_ref::<T>()
+                .map(Some)
+                .ok_or_else(|| anyhow!("corrupt input type for {}", key.name)),
+            Err(_) => Ok(None),
+        }
     }
-
     pub fn status(&self, name: &str) -> InputStatus {
         let entry = self.entries.get(name);
         let sampled = entry.filter(|entry| entry.sequence > 0);
-        let age = sampled.map(|entry| self.observed_at.saturating_duration_since(entry.started));
-        let stale = sampled.is_some_and(|entry| age.unwrap() > entry.max_age);
+        let age = sampled.map(|entry| self.observed_at.saturating_duration_since(entry.completed));
+        let stale =
+            name != self.trigger && sampled.is_some_and(|entry| age.unwrap() > entry.max_age);
         let error = match entry {
-            None => Some(format!("missing input {name}")),
+            None => Some(format!("undeclared input {name}")),
             Some(entry) => entry
                 .result
                 .as_ref()
@@ -116,12 +142,12 @@ impl Batch {
             actual_interval_ms: sampled
                 .and_then(|entry| entry.actual_interval)
                 .map(milliseconds),
-            collection_duration_ms: sampled.map(|entry| milliseconds(entry.duration)),
+            collection_duration_ms: sampled
+                .map(|entry| milliseconds(entry.completed.duration_since(entry.started))),
             age_ms: age.map(milliseconds),
             stale,
             sample_sequence: entry.map_or(0, |entry| entry.sequence),
             missed_periods: entry.map_or(0, |entry| entry.missed_periods),
-            skipped_samples: self.skipped_samples.get(name).copied().unwrap_or(0),
         }
     }
 }
@@ -135,25 +161,32 @@ impl Batch {
         Self {
             id,
             captured_at_ns: timestamp_ns(),
+            trigger: "",
             observed_at: Instant::now(),
             entries: HashMap::new(),
-            skipped_samples: HashMap::new(),
         }
     }
     pub fn insert<T: Send + Sync + 'static>(&mut self, key: Key<T>, value: T) {
         self.entries.insert(
             key.name,
             Arc::new(Entry {
+                input: key.dependency(),
                 captured_at_ns: self.captured_at_ns,
                 started: self.observed_at,
+                completed: self.observed_at,
                 interval: Duration::from_millis(100),
                 max_age: Duration::from_millis(300),
                 actual_interval: None,
-                duration: Duration::ZERO,
                 sequence: 1,
                 missed_periods: 0,
                 result: Ok(Box::new(value)),
             }),
+        );
+    }
+    pub fn unavailable<T: 'static>(&mut self, key: Key<T>, reason: &str) {
+        self.entries.insert(
+            key.name,
+            Arc::new(Entry::unavailable(key.dependency(), reason.into())),
         );
     }
 }
@@ -162,21 +195,18 @@ impl Batch {
 mod tests {
     use super::*;
     #[test]
-    fn cached_data_expires_using_monotonic_age_and_failures_replace_successes() {
+    fn historical_trigger_is_preserved_and_old_retained_inputs_expire() {
         let key = Key::new("sample");
         let mut batch = Batch::for_test(0);
-        batch.insert(key, 7u8);
-        batch.observed_at += Duration::from_millis(200);
-        assert_eq!(*batch.get(key).unwrap(), 7);
-        assert_eq!(batch.status("sample").age_ms, Some(200.0));
-        batch.observed_at += Duration::from_millis(101);
-        assert!(batch.get(key).is_err());
-        assert!(batch.status("sample").stale);
-        let entry = Arc::get_mut(batch.entries.get_mut("sample").unwrap()).unwrap();
-        entry.started = batch.observed_at;
-        entry.result = Err("read failed".into());
-        assert!(batch.get(key).is_err());
-        assert_eq!(batch.status("sample").error.as_deref(), Some("read failed"));
-        assert!(!batch.status("sample").stale);
+        batch.insert(key, 7_u64);
+        batch.observed_at += Duration::from_secs(1);
+        assert!(batch.read(key).unwrap().is_none());
+        assert!(batch.status(key.name).stale);
+        batch.trigger = key.name;
+        assert_eq!(batch.read(key).unwrap(), Some(&7));
+        assert!(!batch.status(key.name).stale);
+        batch.unavailable(key, "read failed");
+        assert!(batch.read(key).unwrap().is_none());
+        assert_eq!(batch.status(key.name).error.as_deref(), Some("read failed"));
     }
 }

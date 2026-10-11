@@ -1,7 +1,7 @@
 use super::procfs::{Selector, TickTracker, ids, read_stat, ticks_per_second};
 use crate::{
     data::{ThreadData, ThreadGroup, Threads},
-    framework::{CollectContext, Collector},
+    framework::{Collector, OperationContext},
 };
 use anyhow::{Result, ensure};
 use std::{collections::HashSet, path::PathBuf, time::Instant};
@@ -22,10 +22,11 @@ impl ThreadCollector {
 }
 impl Collector for ThreadCollector {
     type Data = Threads;
-    fn collect(&mut self, _: &CollectContext) -> Result<Threads> {
+    fn collect(&mut self, context: &OperationContext) -> Result<Threads> {
         let mut data = Threads::default();
         let mut live = HashSet::new();
         for pid in self.selector.candidates(&self.root)? {
+            context.check()?;
             let path = self.root.join(pid.to_string());
             let Ok(process) = read_stat(&path.join("stat")) else {
                 continue;
@@ -34,6 +35,7 @@ impl Collector for ThreadCollector {
                 continue;
             }
             let mut group = ThreadGroup {
+                process_name: process.name.clone(),
                 pid,
                 process_start_ticks: process.start_ticks,
                 items: Vec::new(),
@@ -42,6 +44,7 @@ impl Collector for ThreadCollector {
             let result: Result<()> = (|| {
                 let mut skipped = 0;
                 for tid in ids(&path.join("task"))? {
+                    context.check()?;
                     let stat =
                         match read_stat(&path.join("task").join(tid.to_string()).join("stat")) {
                             Ok(stat) if stat.pid == tid => stat,

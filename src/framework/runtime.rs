@@ -1,69 +1,132 @@
-use super::snapshot::Entry;
-use super::{Batch, CollectContext, Dispatcher, Key, Sample, timestamp_ns};
-use anyhow::{Result, ensure};
+use super::{
+    Batch, Dependency, Dispatcher, Key, OperationContext, Sample, control::Task, snapshot::Entry,
+    timestamp_ns,
+};
+use anyhow::{Result, anyhow, ensure};
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    thread::{self, JoinHandle},
+    thread,
     time::{Duration, Instant},
 };
 
 pub trait Collector: Send + 'static {
     type Data: Send + Sync + 'static;
-    fn collect(&mut self, context: &CollectContext) -> Result<Self::Data>;
+    fn collect(&mut self, context: &OperationContext) -> Result<Self::Data>;
+}
+impl<T: Send + Sync + 'static> Collector for Box<dyn Collector<Data = T>> {
+    type Data = T;
+    fn collect(&mut self, context: &OperationContext) -> Result<T> {
+        (**self).collect(context)
+    }
 }
 pub trait Assembler: Send {
     fn name(&self) -> &str;
-    fn dependencies(&self) -> &[&'static str];
+    fn dependencies(&self) -> &[Dependency];
     fn assemble(&mut self, batch: &Batch) -> Result<Vec<Sample>>;
 }
-
 #[derive(Clone, Copy)]
 pub struct Schedule {
     interval: Duration,
     max_age: Duration,
+    timeout: Duration,
 }
 impl Schedule {
-    pub fn new(interval: Duration, stale_after_periods: u32) -> Result<Self> {
+    pub fn new(interval: Duration, stale_after_periods: u32, timeout: Duration) -> Result<Self> {
         ensure!(
             !interval.is_zero() && interval <= Duration::from_secs(86400),
-            "collection interval must be positive and at most 24 hours"
+            "invalid collection interval"
         );
         ensure!(
-            stale_after_periods > 0,
-            "stale_after_periods must be positive"
+            stale_after_periods > 0 && !timeout.is_zero(),
+            "invalid collection timeout/expiry"
         );
-        let max_age = interval
-            .checked_mul(stale_after_periods)
-            .ok_or_else(|| anyhow::anyhow!("maximum sample age overflow"))?;
-        Ok(Self { interval, max_age })
+        Ok(Self {
+            interval,
+            max_age: interval
+                .checked_mul(stale_after_periods)
+                .ok_or_else(|| anyhow!("maximum sample age overflow"))?,
+            timeout,
+        })
     }
 }
-
-struct Worker {
-    name: &'static str,
-    start: mpsc::Sender<()>,
-    handle: JoinHandle<()>,
+#[derive(Clone, Copy)]
+pub struct RuntimeOptions {
+    pub ingress_capacity: usize,
+    pub ingress_timeout: Duration,
+    pub shutdown_timeout: Duration,
 }
-type Latest = Arc<Mutex<HashMap<&'static str, Arc<Entry>>>>;
-
+struct Worker {
+    input: Dependency,
+    start: mpsc::Sender<()>,
+    task: Task,
+    failure: Option<String>,
+}
 pub struct Runtime {
     collectors: Vec<Worker>,
-    latest: Latest,
+    entries: HashMap<&'static str, Arc<Entry>>,
     assemblers: Vec<Box<dyn Assembler>>,
     dispatcher: Dispatcher,
+    options: RuntimeOptions,
+    sender: mpsc::SyncSender<Entry>,
+    receiver: mpsc::Receiver<Entry>,
+    batch_id: u64,
+    started: bool,
 }
 impl Runtime {
-    pub fn new(dispatcher: Dispatcher) -> Self {
-        Self {
+    pub fn new(dispatcher: Dispatcher, options: RuntimeOptions) -> Result<Self> {
+        ensure!(
+            options.ingress_capacity > 0
+                && !options.ingress_timeout.is_zero()
+                && !options.shutdown_timeout.is_zero(),
+            "invalid runtime limits"
+        );
+        let (sender, receiver) = mpsc::sync_channel(options.ingress_capacity);
+        Ok(Self {
             collectors: Vec::new(),
-            latest: Arc::new(Mutex::new(HashMap::new())),
+            entries: HashMap::new(),
             assemblers: Vec::new(),
             dispatcher,
+            options,
+            sender,
+            receiver,
+            batch_id: 0,
+            started: false,
+        })
+    }
+    pub fn add_unavailable<T: Send + Sync + 'static>(
+        &mut self,
+        key: Key<T>,
+        error: String,
+    ) -> Result<()> {
+        ensure!(
+            !self.entries.contains_key(key.name),
+            "duplicate input {}",
+            key.name
+        );
+        self.entries.insert(
+            key.name,
+            Arc::new(Entry::unavailable(key.dependency(), error)),
+        );
+        Ok(())
+    }
+    /// A capability is registered once, including a typed unavailable entry.
+    pub fn add_capability<T: Send + Sync + 'static>(
+        &mut self,
+        key: Key<T>,
+        collector: Result<Box<dyn Collector<Data = T>>, String>,
+        schedule: Schedule,
+    ) -> Result<()> {
+        match collector {
+            Ok(collector) => self.add_collector(key, collector, schedule),
+            Err(error) => {
+                eprintln!("input {} unavailable for this run: {error}", key.name);
+                self.add_unavailable(key, error)
+            }
         }
     }
     pub fn add_collector<C: Collector>(
@@ -72,198 +135,294 @@ impl Runtime {
         mut collector: C,
         schedule: Schedule,
     ) -> Result<()> {
-        ensure!(
-            !self.collectors.iter().any(|w| w.name == key.name),
-            "duplicate collector {}",
-            key.name
-        );
-        let (start, control) = mpsc::channel();
-        let latest = self.latest.clone();
-        let handle = thread::Builder::new()
-            .name(format!("collect-{}", key.name))
-            .spawn(move || {
-                // Registration does not collect while other sources are being probed.
-                if control.recv().is_err() {
-                    return;
+        self.add_unavailable(key, "waiting for first observation".into())?;
+        let initial = Arc::get_mut(self.entries.get_mut(key.name).unwrap()).unwrap();
+        initial.interval = schedule.interval;
+        initial.max_age = schedule.max_age;
+        let (start, control_rx) = mpsc::channel();
+        let sender = self.sender.clone();
+        let input = key.dependency();
+        let ingress_timeout = self.options.ingress_timeout;
+        let task = Task::spawn(format!("collect-{}", key.name), move |control| {
+            if control_rx.recv().is_err() {
+                return Ok(());
+            }
+            let mut deadline = Instant::now();
+            let mut previous_start = None;
+            let mut sequence = 0;
+            let mut missed_periods = 0;
+            let mut last_error = None;
+            while !control.cancel.is_cancelled() {
+                let started = Instant::now();
+                let operation = control.operation(schedule.timeout);
+                let result = collector
+                    .collect(&operation.context)
+                    .and_then(|data| {
+                        operation.context.check_deadline()?;
+                        Ok(data)
+                    })
+                    .map(|data| Box::new(data) as Box<dyn std::any::Any + Send + Sync>)
+                    .map_err(|error| format!("{error:#}"));
+                let expired = operation.context.remaining().is_zero();
+                let captured_at_ns = operation.context.captured_at_ns;
+                drop(operation);
+                let completed = Instant::now();
+                let (next, skipped) = next_deadline(deadline, schedule.interval, completed);
+                missed_periods += skipped;
+                sequence += 1;
+                if let Err(error) = &result {
+                    if last_error.as_ref() != Some(error) {
+                        eprintln!("collector {}: {error}", input.name);
+                    }
+                    last_error = Some(error.clone());
+                } else {
+                    last_error = None;
                 }
-                let mut deadline = Instant::now();
-                let mut previous_start = None;
-                let mut sequence = 0;
-                let mut missed_periods = 0;
-                let mut last_error = None;
+                let mut entry = Entry {
+                    input,
+                    captured_at_ns,
+                    started,
+                    completed,
+                    interval: schedule.interval,
+                    max_age: schedule.max_age,
+                    actual_interval: previous_start
+                        .map(|previous| started.duration_since(previous)),
+                    sequence,
+                    missed_periods,
+                    result,
+                };
+                // Keep every completed observation. Backpressure pauses this producer
+                // and is bounded; it never replaces a queued observation with a newer one.
+                let until = Instant::now() + ingress_timeout;
                 loop {
-                    let started = Instant::now();
-                    let context = CollectContext::now();
-                    let result = collector
-                        .collect(&context)
-                        .map(|data| Box::new(data) as Box<dyn std::any::Any + Send + Sync>)
-                        .map_err(|error| format!("{error:#}"));
-                    let finished = Instant::now();
-                    let (next, skipped) = next_deadline(deadline, schedule.interval, finished);
-                    missed_periods += skipped;
-                    sequence += 1;
-                    if let Err(error) = &result {
-                        if last_error.as_ref() != Some(error) {
-                            eprintln!("collector {}: {error}", key.name);
-                        }
-                        last_error = Some(error.clone());
-                    } else {
-                        last_error = None;
+                    match sender.try_send(entry) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Disconnected(_)) => return Ok(()),
+                        Err(mpsc::TrySendError::Full(value)) => entry = value,
                     }
-                    let entry = Entry {
-                        captured_at_ns: context.captured_at_ns,
-                        started,
-                        interval: schedule.interval,
-                        max_age: schedule.max_age,
-                        actual_interval: previous_start
-                            .map(|previous| started.duration_since(previous)),
-                        duration: finished.duration_since(started),
-                        sequence,
-                        missed_periods,
-                        result,
-                    };
-                    // Collection never holds this lock. Only a pointer is replaced.
-                    latest.lock().unwrap().insert(key.name, Arc::new(entry));
-                    previous_start = Some(started);
-                    deadline = next;
-                    match control.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        _ => break,
-                    }
+                    ensure!(
+                        Instant::now() < until,
+                        "observation queue timeout; collector disabled, undelivered sequence {sequence}"
+                    );
+                    thread::sleep(Duration::from_millis(1));
                 }
-            })?;
-        self.latest.lock().unwrap().insert(
-            key.name,
-            Arc::new(Entry {
-                captured_at_ns: 0,
-                started: Instant::now(),
-                interval: schedule.interval,
-                max_age: schedule.max_age,
-                actual_interval: None,
-                duration: Duration::ZERO,
-                sequence: 0,
-                missed_periods: 0,
-                result: Err("waiting for first collection".into()),
-            }),
-        );
+                ensure!(!expired, "collection deadline exceeded; collector disabled");
+                previous_start = Some(started);
+                // Queue waiting also consumes schedule slots. Account for those
+                // once, without immediately running a catch-up collection.
+                let now = Instant::now();
+                deadline = if now >= next {
+                    let (following, skipped) =
+                        next_deadline(next - schedule.interval, schedule.interval, now);
+                    missed_periods += skipped;
+                    following
+                } else {
+                    next
+                };
+                control
+                    .cancel
+                    .wait(deadline.saturating_duration_since(Instant::now()));
+            }
+            Ok(())
+        })?;
         self.collectors.push(Worker {
-            name: key.name,
+            input,
             start,
-            handle,
+            task,
+            failure: None,
         });
         Ok(())
     }
     pub fn add_assembler(&mut self, assembler: impl Assembler + 'static) -> Result<()> {
+        ensure!(
+            !self
+                .assemblers
+                .iter()
+                .any(|existing| existing.name() == assembler.name()),
+            "duplicate assembler {}",
+            assembler.name()
+        );
         for dependency in assembler.dependencies() {
+            let entry = self.entries.get(dependency.name).ok_or_else(|| {
+                anyhow!(
+                    "assembler {} requires unregistered input {}",
+                    assembler.name(),
+                    dependency.name
+                )
+            })?;
             ensure!(
-                self.collectors
-                    .iter()
-                    .any(|worker| worker.name == *dependency),
-                "assembler {} requires unregistered collector {dependency}",
-                assembler.name()
+                entry.input.type_id == dependency.type_id,
+                "assembler {}: input type mismatch for {} ({} vs {})",
+                assembler.name(),
+                dependency.name,
+                entry.input.type_name,
+                dependency.type_name
             );
         }
         self.assemblers.push(Box::new(assembler));
         Ok(())
     }
-    pub fn run(
-        &mut self,
-        interval: Duration,
-        limit: Option<u64>,
-        stop: Arc<AtomicBool>,
-    ) -> Result<()> {
-        ensure!(
-            !interval.is_zero() && interval <= Duration::from_secs(86400),
-            "publication interval must be positive and at most 24 hours"
-        );
-        let result = self.run_loop(interval, limit, &stop);
-        let collectors = self.stop_collectors();
-        let outputs = self.dispatcher.finish();
-        let failures: Vec<_> = [result, collectors, outputs]
-            .into_iter()
-            .filter_map(Result::err)
-            .map(|error| format!("{error:#}"))
-            .collect();
-        ensure!(failures.is_empty(), "{}", failures.join("; "));
+    fn accept(&mut self, entry: Entry) -> Result<()> {
+        let trigger = entry.input.name;
+        let captured_at_ns = entry.captured_at_ns;
+        let observed_at = entry.completed;
+        self.entries.insert(trigger, Arc::new(entry));
+        for assembler in &mut self.assemblers {
+            if !assembler
+                .dependencies()
+                .iter()
+                .any(|input| input.name == trigger)
+            {
+                continue;
+            }
+            let entries = assembler
+                .dependencies()
+                .iter()
+                .map(|input| (input.name, self.entries[input.name].clone()))
+                .collect();
+            let batch = Batch {
+                id: self.batch_id,
+                captured_at_ns,
+                trigger,
+                observed_at,
+                entries,
+            };
+            for sample in assembler.assemble(&batch)? {
+                self.dispatcher.publish(sample)?;
+            }
+        }
+        // Late queued observations must still be recorded, but cannot revive a
+        // source which supervision has disabled. Keep its retained state failed.
+        if let Some(worker) = self
+            .collectors
+            .iter()
+            .find(|worker| worker.input.name == trigger)
+            && let Some(error) = &worker.failure
+        {
+            self.entries.insert(
+                trigger,
+                Arc::new(Entry::unavailable(worker.input, error.clone())),
+            );
+        }
+        self.batch_id += 1;
         Ok(())
     }
-    fn run_loop(
-        &mut self,
-        interval: Duration,
-        limit: Option<u64>,
-        stop: &AtomicBool,
-    ) -> Result<()> {
+    fn poll(&mut self) -> Result<()> {
+        let mut failures = Vec::new();
+        for worker in &mut self.collectors {
+            if worker.failure.is_none() {
+                if let Some(error) = worker.task.poll().map(str::to_string) {
+                    eprintln!("{error}");
+                    worker.failure = Some(error.clone());
+                    failures.push((worker.input, error));
+                }
+            } else {
+                worker.task.poll();
+            }
+        }
+        for (input, error) in failures {
+            let mut entry = Entry::unavailable(input, error);
+            entry.captured_at_ns = timestamp_ns();
+            self.accept(entry)?;
+        }
+        ensure!(
+            self.collectors.is_empty()
+                || self
+                    .collectors
+                    .iter()
+                    .any(|worker| worker.failure.is_none()),
+            "all collectors have failed"
+        );
+        self.dispatcher.poll()
+    }
+    pub fn run(&mut self, duration: Option<Duration>, stop: Arc<AtomicBool>) -> Result<()> {
+        ensure!(!self.started, "runtime can only be run once");
+        self.started = true;
+        let end = duration.map(|duration| Instant::now() + duration);
         for worker in &self.collectors {
             worker.start.send(())?;
         }
-        let mut deadline = Instant::now() + interval;
-        let mut previous_sequences = HashMap::new();
-        let mut skipped_samples = HashMap::<&'static str, u64>::new();
-        for id in 0..limit.unwrap_or(u64::MAX) {
-            while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
-                thread::sleep(
-                    deadline
-                        .saturating_duration_since(Instant::now())
-                        .min(Duration::from_millis(50)),
-                );
-            }
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            for worker in &self.collectors {
-                ensure!(
-                    !worker.handle.is_finished(),
-                    "collector {} stopped unexpectedly",
-                    worker.name
-                );
-            }
-            let entries = self.latest.lock().unwrap().clone();
-            for (&name, entry) in &entries {
-                let previous = previous_sequences.insert(name, entry.sequence).unwrap_or(0);
-                *skipped_samples.entry(name).or_default() +=
-                    entry.sequence.saturating_sub(previous).saturating_sub(1);
-            }
-            let batch = Batch {
-                id,
-                captured_at_ns: timestamp_ns(),
-                observed_at: Instant::now(),
-                entries,
-                skipped_samples: skipped_samples.clone(),
-            };
-            for assembler in &mut self.assemblers {
-                for sample in assembler.assemble(&batch)? {
-                    self.dispatcher.publish(sample)?;
+        let result: Result<()> = (|| {
+            while !stop.load(Ordering::Relaxed) && end.is_none_or(|end| Instant::now() < end) {
+                self.poll()?;
+                match self.receiver.recv_timeout(Duration::from_millis(5)) {
+                    Ok(entry) => self.accept(entry)?,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            deadline = next_deadline(deadline, interval, Instant::now()).0;
+            Ok(())
+        })();
+        // One shared shutdown budget. Cancel producers, keep consuming pending
+        // observations, then drain all output queues concurrently.
+        let shutdown_started = Instant::now();
+        let deadline = shutdown_started + self.options.shutdown_timeout;
+        // Reserve at least half of the shutdown budget for draining/closing outputs.
+        let collector_deadline = shutdown_started + self.options.shutdown_timeout / 2;
+        for worker in &self.collectors {
+            worker.task.control.cancel.cancel();
         }
-        Ok(())
-    }
-    fn stop_collectors(&mut self) -> Result<()> {
-        let handles: Vec<_> = self
-            .collectors
-            .drain(..)
-            .map(|worker| {
-                drop(worker.start); // Interrupt all sleeping collectors before joining any.
-                (worker.name, worker.handle)
-            })
-            .collect();
-        let failed: Vec<_> = handles
-            .into_iter()
-            .filter_map(|(name, handle)| handle.join().err().map(|_| name))
-            .collect();
-        ensure!(failed.is_empty(), "collectors panicked: {failed:?}");
+        let mut errors = Vec::new();
+        if let Err(error) = result {
+            errors.push(format!("{error:#}"));
+        }
+        loop {
+            if Instant::now() >= collector_deadline {
+                errors.push(
+                    "collector shutdown budget exhausted; queued observations may be incomplete"
+                        .into(),
+                );
+                break;
+            }
+            for worker in &mut self.collectors {
+                worker.task.poll();
+            }
+            match self.receiver.try_recv() {
+                Ok(entry) => {
+                    if let Err(error) = self.accept(entry) {
+                        errors.push(format!("{error:#}"));
+                    }
+                }
+                Err(_)
+                    if self.collectors.iter().all(|worker| worker.task.finished())
+                        || Instant::now() >= collector_deadline =>
+                {
+                    break;
+                }
+                Err(_) => thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        // Disconnect producers before joining so even pending queue sends stop.
+        let (_, empty) = mpsc::sync_channel(1);
+        let pending = std::mem::replace(&mut self.receiver, empty);
+        let unassembled = pending.try_iter().count();
+        drop(pending);
+        if unassembled > 0 {
+            errors.push(format!(
+                "{unassembled} queued observations could not be assembled before shutdown"
+            ));
+        }
+        for worker in &mut self.collectors {
+            if let Err(error) = worker.task.finish(collector_deadline) {
+                errors.push(format!("{error:#}"));
+            }
+        }
+        if let Err(error) = self.dispatcher.finish(deadline) {
+            errors.push(format!("{error:#}"));
+        }
+        errors.sort();
+        errors.dedup();
+        ensure!(errors.is_empty(), "{}", errors.join("; "));
         Ok(())
     }
 }
 impl Drop for Runtime {
     fn drop(&mut self) {
-        let _ = self.stop_collectors();
+        for worker in &self.collectors {
+            worker.task.control.cancel.cancel();
+        }
     }
 }
-
-// Advance on the original monotonic grid, skipping missed slots without catch-up
-// bursts or adding a full extra period after a slow collection.
 fn next_deadline(previous: Instant, interval: Duration, finished: Instant) -> (Instant, u64) {
     let next = previous + interval;
     if next > finished {
@@ -278,221 +437,106 @@ fn next_deadline(previous: Instant, interval: Duration, finished: Instant) -> (I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::{Output, Overflow, StreamDescriptor};
-    use bytes::Bytes;
-    use std::sync::Mutex;
-
-    struct Counter(u8);
-    impl Collector for Counter {
-        type Data = u8;
-        fn collect(&mut self, _: &CollectContext) -> Result<u8> {
-            self.0 += 1;
-            ensure!(self.0 != 2, "temporary read failure");
-            Ok(self.0)
-        }
-    }
-    struct Combiner {
-        key: Key<u8>,
-        dependencies: [&'static str; 1],
-        topic: &'static str,
-    }
-    impl Assembler for Combiner {
-        fn name(&self) -> &str {
-            self.topic
-        }
-        fn dependencies(&self) -> &[&'static str] {
-            &self.dependencies
-        }
-        fn assemble(&mut self, batch: &Batch) -> Result<Vec<Sample>> {
-            let value = match batch.get(self.key) {
-                Ok(value) => *value,
-                Err(_) => 0,
-            };
-            Ok(vec![Sample {
-                stream: Arc::new(StreamDescriptor {
-                    topic: self.topic.into(),
-                    message_encoding: "test".into(),
-                    schema_name: "test".into(),
-                    schema_encoding: "test".into(),
-                    schema: Bytes::new(),
-                }),
-                captured_at_ns: batch.captured_at_ns,
-                sequence: 0,
-                payload: Bytes::from(vec![value]),
-            }])
-        }
-    }
-    struct Capture(Arc<Mutex<Vec<Sample>>>, Arc<AtomicBool>);
-    impl Output for Capture {
-        fn write(&mut self, sample: &Sample) -> Result<()> {
-            self.0.lock().unwrap().push(sample.clone());
-            Ok(())
-        }
-        fn close(&mut self) -> Result<()> {
-            self.1.store(true, Ordering::Relaxed);
-            Ok(())
-        }
+    #[test]
+    fn scheduling_skips_overruns_without_catchup_bursts() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(100);
+        assert_eq!(
+            next_deadline(start, interval, start + Duration::from_millis(250)),
+            (start + Duration::from_millis(300), 2)
+        );
+        assert!(Schedule::new(Duration::ZERO, 3, interval).is_err());
+        assert!(Schedule::new(interval, 0, interval).is_err());
+        assert!(Schedule::new(interval, 3, Duration::ZERO).is_err());
     }
     #[test]
-    fn shares_latest_snapshot_and_drains_on_shutdown() {
-        let values = Arc::new(Mutex::new(Vec::new()));
-        let closed = Arc::new(AtomicBool::new(false));
-        let mut dispatcher = Dispatcher::default();
-        dispatcher
-            .add(
-                "capture",
-                Capture(values.clone(), closed.clone()),
-                1,
-                Overflow::Block,
-            )
-            .unwrap();
-        let mut runtime = Runtime::new(dispatcher);
-        let key = Key::new("counter");
-        assert!(
-            runtime
-                .add_assembler(Combiner {
-                    key,
-                    dependencies: [key.name],
-                    topic: "/missing"
-                })
-                .is_err()
-        );
+    fn late_observation_is_processed_without_reviving_a_disabled_source() {
+        struct Empty;
+        impl Collector for Empty {
+            type Data = u64;
+            fn collect(&mut self, _: &OperationContext) -> Result<u64> {
+                Ok(0)
+            }
+        }
+        let mut runtime = Runtime::new(
+            Dispatcher::default(),
+            RuntimeOptions {
+                ingress_capacity: 4,
+                ingress_timeout: Duration::from_secs(1),
+                shutdown_timeout: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        let key = Key::new("source");
         runtime
             .add_collector(
                 key,
-                Counter(0),
-                Schedule::new(Duration::from_millis(5), 3).unwrap(),
+                Empty,
+                Schedule::new(Duration::from_secs(1), 3, Duration::from_secs(1)).unwrap(),
             )
             .unwrap();
-        assert!(
-            runtime
-                .add_collector(
-                    key,
-                    Counter(9),
-                    Schedule::new(Duration::from_millis(5), 3).unwrap()
-                )
-                .is_err()
+        runtime.collectors[0].failure = Some("timed out".into());
+        let mut entry = Entry::unavailable(key.dependency(), String::new());
+        entry.result = Ok(Box::new(42_u64));
+        entry.sequence = 1;
+        runtime.accept(entry).unwrap();
+        assert_eq!(
+            runtime.entries[key.name].result.as_ref().err().unwrap(),
+            "timed out"
         );
-        for topic in ["/first", "/second"] {
-            runtime
-                .add_assembler(Combiner {
-                    key,
-                    dependencies: [key.name],
-                    topic,
-                })
-                .unwrap();
-        }
-        runtime
-            .run(
-                Duration::from_millis(10),
-                Some(3),
-                Arc::new(AtomicBool::new(false)),
-            )
-            .unwrap();
-        assert!(closed.load(Ordering::Relaxed));
-        let samples = values.lock().unwrap();
-        assert_eq!(samples.len(), 6);
-        assert!(samples.iter().any(|sample| sample.payload[0] > 0));
-        for index in 0..3 {
-            assert_eq!(samples[index * 2].payload, samples[index * 2 + 1].payload);
-            assert_eq!(
-                samples[index * 2].captured_at_ns,
-                samples[index * 2 + 1].captured_at_ns
-            );
-            assert_eq!(samples[index * 2].sequence, index as u32);
-        }
     }
+}
 
+#[cfg(test)]
+mod overload_tests {
+    use super::*;
     #[test]
-    fn slow_collection_does_not_block_fast_collection_or_publication() {
-        struct Fast(u8);
-        impl Collector for Fast {
-            type Data = u8;
-            fn collect(&mut self, _: &CollectContext) -> Result<u8> {
-                self.0 = self.0.saturating_add(1);
+    fn full_ingress_retains_order_and_reports_undelivered_sequence() {
+        struct Count(u64);
+        impl Collector for Count {
+            type Data = u64;
+            fn collect(&mut self, _: &OperationContext) -> Result<u64> {
+                self.0 += 1;
                 Ok(self.0)
             }
         }
-        struct Slow(mpsc::Sender<()>, mpsc::Receiver<()>);
-        impl Collector for Slow {
-            type Data = u8;
-            fn collect(&mut self, _: &CollectContext) -> Result<u8> {
-                self.0.send(())?;
-                self.1.recv_timeout(Duration::from_secs(5))?;
-                Ok(1)
-            }
-        }
-        struct Notice(mpsc::Sender<Vec<u8>>);
-        impl Output for Notice {
-            fn write(&mut self, sample: &Sample) -> Result<()> {
-                self.0.send(sample.payload.to_vec())?;
-                Ok(())
-            }
-            fn close(&mut self) -> Result<()> {
-                Ok(())
-            }
-        }
-        let (entered, ready) = mpsc::channel();
-        let (release, blocked) = mpsc::channel();
-        let (notice, samples) = mpsc::channel();
-        let mut dispatcher = Dispatcher::default();
-        dispatcher
-            .add("notice", Notice(notice), 128, Overflow::Block)
-            .unwrap();
-        let mut runtime = Runtime::new(dispatcher);
-        let key = Key::new("fast");
+        let mut runtime = Runtime::new(
+            Dispatcher::default(),
+            RuntimeOptions {
+                ingress_capacity: 2,
+                ingress_timeout: Duration::from_millis(30),
+                shutdown_timeout: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
         runtime
             .add_collector(
-                key,
-                Fast(0),
-                Schedule::new(Duration::from_millis(5), 100).unwrap(),
+                Key::new("counter"),
+                Count(0),
+                Schedule::new(Duration::from_millis(1), 3, Duration::from_secs(1)).unwrap(),
             )
             .unwrap();
-        runtime
-            .add_collector(
-                Key::new("slow"),
-                Slow(entered, blocked),
-                Schedule::new(Duration::from_secs(10), 3).unwrap(),
-            )
-            .unwrap();
-        runtime
-            .add_assembler(Combiner {
-                key,
-                dependencies: [key.name],
-                topic: "/fast",
-            })
-            .unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let signal = stop.clone();
-        let worker = thread::spawn(move || runtime.run(Duration::from_millis(5), None, signal));
-        ready.recv_timeout(Duration::from_secs(2)).unwrap();
-        // The slow source stays blocked until a third fast observation is published.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let progressed = loop {
-            match samples.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(sample) if sample[0] >= 3 => break true,
-                Ok(_) => {}
-                Err(_) => break false,
-            }
-        };
-        stop.store(true, Ordering::Relaxed);
-        release.send(()).unwrap();
-        worker.join().unwrap().unwrap();
-        assert!(progressed, "a slow source blocked unrelated samples");
-    }
-
-    #[test]
-    fn overruns_skip_slots_without_drifting_or_bursting() {
-        let start = Instant::now();
-        let interval = Duration::from_millis(100);
-        let (next, missed) = next_deadline(start, interval, start + Duration::from_millis(250));
-        assert_eq!(next, start + Duration::from_millis(300));
-        assert_eq!(missed, 2);
-        assert_eq!(
-            next_deadline(start, interval, start + Duration::from_millis(20)),
-            (start + interval, 0)
+        runtime.collectors[0].start.send(()).unwrap();
+        // Deliberately keep the consumer stopped until the bounded producer fails.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !runtime.collectors[0].task.finished() && Instant::now() < deadline {
+            runtime.collectors[0].task.poll();
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            runtime.collectors[0]
+                .task
+                .poll()
+                .unwrap()
+                .contains("undelivered sequence 3")
         );
-        assert!(Schedule::new(Duration::ZERO, 3).is_err());
-        assert!(Schedule::new(interval, 0).is_err());
+        let entries: Vec<_> = runtime.receiver.try_iter().collect();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
     }
 }

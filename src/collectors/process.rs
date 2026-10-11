@@ -2,7 +2,7 @@ pub use super::procfs::Selector;
 use super::procfs::{TickTracker, page_size, read_stat, ticks_per_second};
 use crate::{
     data::{ProcessData, ProcessMemory, ProcessMemoryData, Processes},
-    framework::{CollectContext, Collector},
+    framework::{Collector, OperationContext},
 };
 use anyhow::{Context, Result};
 use std::{collections::HashSet, path::PathBuf, time::Instant};
@@ -23,10 +23,11 @@ impl ProcessCollector {
 }
 impl Collector for ProcessCollector {
     type Data = Processes;
-    fn collect(&mut self, _: &CollectContext) -> Result<Processes> {
+    fn collect(&mut self, context: &OperationContext) -> Result<Processes> {
         let mut data = Processes::default();
         let mut live = HashSet::new();
         for pid in self.selector.candidates(&self.root)? {
+            context.check()?;
             let stat = match read_stat(&self.root.join(pid.to_string()).join("stat")) {
                 Ok(stat) if stat.pid == pid => stat,
                 _ => {
@@ -69,9 +70,10 @@ impl ProcessMemoryCollector {
 }
 impl Collector for ProcessMemoryCollector {
     type Data = ProcessMemory;
-    fn collect(&mut self, _: &CollectContext) -> Result<Self::Data> {
+    fn collect(&mut self, context: &OperationContext) -> Result<Self::Data> {
         let mut data = ProcessMemory::default();
         for pid in self.selector.candidates(&self.root)? {
+            context.check()?;
             let stat = match read_stat(&self.root.join(pid.to_string()).join("stat")) {
                 Ok(stat) if stat.pid == pid && self.selector.includes(&stat) => stat,
                 _ => continue,
@@ -79,6 +81,7 @@ impl Collector for ProcessMemoryCollector {
             data.items.insert(
                 (pid, stat.start_ticks),
                 ProcessMemoryData {
+                    name: stat.name,
                     rss_bytes: stat
                         .rss_pages
                         .checked_mul(self.pages)

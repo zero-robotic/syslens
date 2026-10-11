@@ -1,4 +1,4 @@
-use crate::framework::{Output, Sample, timestamp_ns};
+use crate::framework::{OperationContext, Output, Sample, timestamp_ns};
 use anyhow::{Context, Result};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -80,7 +80,8 @@ impl McapOutput {
     }
 }
 impl Output for McapOutput {
-    fn write(&mut self, sample: &Sample) -> Result<()> {
+    fn write(&mut self, sample: &Sample, context: &OperationContext) -> Result<()> {
+        context.check()?;
         if self.payload_bytes > 0
             && (self.started.elapsed() >= self.rotate_after
                 || self.payload_bytes >= self.payload_limit)
@@ -124,7 +125,8 @@ impl Output for McapOutput {
         }
         Ok(())
     }
-    fn close(&mut self) -> Result<()> {
+    fn close(&mut self, context: &OperationContext) -> Result<()> {
+        context.check()?;
         self.finish_segment()
     }
 }
@@ -162,9 +164,9 @@ mod tests {
             123456789,
         );
         for _ in 0..3 {
-            output.write(&sample).unwrap();
+            output.write(&sample, &OperationContext::now()).unwrap();
         }
-        output.close().unwrap();
+        output.close(&OperationContext::now()).unwrap();
         let files: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .map(|item| item.unwrap().path())

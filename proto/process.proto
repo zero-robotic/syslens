@@ -21,7 +21,7 @@ message Process {
   optional double cpu_percent = 5;
   optional uint64 rss_bytes = 6;
   optional uint64 virtual_bytes = 7;
-  uint64 cpu_time_ticks = 8;
+  optional uint64 cpu_time_ticks = 8; // Absent when CPU input is unavailable.
   repeated Thread threads = 9;
   optional string threads_error = 10;
   GpuMetrics gpu = 11;
