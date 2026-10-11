@@ -1,6 +1,6 @@
 use super::procfs::{Selector, read_stat};
 use crate::{
-    data::{GpuAccountingData, GpuMetricsData},
+    data::{GpuAccountingData, GpuData, GpuMetricsData},
     framework::{CollectContext, Collector, timestamp_ns},
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -30,19 +30,53 @@ const PROCESS_QUERY: &[&str] = &[
 ];
 const UTILIZATION_QUERY: &[&str] = &["pmon", "-i", "0", "-s", "u", "-c", "1"];
 
+#[derive(Clone)]
 enum Backend {
     Nvmap(PathBuf),
     Smi {
         executable: PathBuf,
         // Failed startup capabilities stay disabled for this run.
         device: Result<(), String>,
+        load: Result<(), String>,
         memory: Result<(), String>,
         utilization: Result<(), String>,
     },
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Metric {
+    Memory,
+    ProcessUtilization,
+}
+
+pub struct GpuCollectors {
+    pub memory: Result<GpuAccountingCollector, String>,
+    pub process_utilization: Result<GpuAccountingCollector, String>,
+    pub system_utilization: Result<SmiLoadCollector, String>,
+}
+
+pub struct SmiLoadCollector {
+    executable: PathBuf,
+    timeout: Duration,
+}
+impl Collector for SmiLoadCollector {
+    type Data = GpuData;
+    fn collect(&mut self, _: &CollectContext) -> Result<Self::Data> {
+        let sample = parse_device(&command(&self.executable, DEVICE_QUERY, self.timeout)?)?;
+        Ok(GpuData {
+            utilization_percent: sample
+                .utilization_percent
+                .context("nvidia-smi system utilization N/A")?,
+            source: sample.utilization_source,
+            observed_at_ns: sample.utilization_timestamp_ns.unwrap_or_else(timestamp_ns),
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct GpuAccountingCollector {
     backend: Backend,
+    metric: Metric,
     proc_root: PathBuf,
     selector: Option<Selector>,
     timeout: Duration,
@@ -68,13 +102,16 @@ impl GpuAccountingCollector {
                     .with_context(|| {
                         format!("nvmap unavailable ({nvmap_error:#}); nvidia-smi probe")
                     })?;
-                let device = if device_sample.utilization_percent.is_some()
-                    || device_sample.memory_used_bytes.is_some()
+                let load = device_sample
+                    .utilization_percent
+                    .map(|_| ())
+                    .ok_or_else(|| "nvidia-smi system utilization N/A".to_string());
+                let device = if device_sample.memory_used_bytes.is_some()
                     || device_sample.memory_total_bytes.is_some()
                 {
                     Ok(())
                 } else {
-                    Err("nvidia-smi system utilization and memory are N/A".into())
+                    Err("nvidia-smi system memory is N/A".into())
                 };
                 let (memory, utilization) = if selector.is_some() {
                     (
@@ -94,21 +131,13 @@ impl GpuAccountingCollector {
                     )
                 };
                 ensure!(
-                    device.is_ok() || memory.is_ok() || utilization.is_ok(),
+                    load.is_ok() || device.is_ok() || memory.is_ok() || utilization.is_ok(),
                     "no supported nvidia-smi metrics: system={device:?}, memory={memory:?}, utilization={utilization:?}"
                 );
-                for (name, capability) in [
-                    ("system", &device),
-                    ("process memory", &memory),
-                    ("process utilization", &utilization),
-                ] {
-                    if let Err(error) = capability {
-                        eprintln!("GPU {name} unavailable for this run: {error}");
-                    }
-                }
                 Backend::Smi {
                     executable,
                     device,
+                    load,
                     memory,
                     utilization,
                 }
@@ -116,10 +145,53 @@ impl GpuAccountingCollector {
         };
         Ok(Self {
             backend,
+            metric: Metric::Memory,
             proc_root,
             selector,
             timeout,
         })
+    }
+
+    pub fn split(self) -> GpuCollectors {
+        let (memory, utilization, system_utilization) = match &self.backend {
+            Backend::Nvmap(_) => (
+                Ok(()),
+                Err("per-process GPU utilization is not exposed by Orin nvmap".to_string()),
+                Err("nvmap does not expose system GPU utilization".to_string()),
+            ),
+            Backend::Smi {
+                executable,
+                device,
+                load,
+                memory,
+                utilization,
+            } => (
+                if device.is_ok() || memory.is_ok() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "system memory: {}; process memory: {}",
+                        device.as_ref().unwrap_err(),
+                        memory.as_ref().unwrap_err()
+                    ))
+                },
+                utilization.clone(),
+                load.clone().map(|_| SmiLoadCollector {
+                    executable: executable.clone(),
+                    timeout: self.timeout,
+                }),
+            ),
+        };
+        let process_utilization = utilization.map(|_| {
+            let mut collector = self.clone();
+            collector.metric = Metric::ProcessUtilization;
+            collector
+        });
+        GpuCollectors {
+            memory: memory.map(|_| self),
+            process_utilization,
+            system_utilization,
+        }
     }
 
     fn identities(&self) -> BTreeMap<u32, u64> {
@@ -190,24 +262,40 @@ impl Collector for GpuAccountingCollector {
                 device,
                 memory,
                 utilization,
+                ..
             } => {
-                let system = match available_query(device, executable, DEVICE_QUERY, self.timeout)
-                    .and_then(|text| parse_device(&text))
-                {
-                    Ok(data) => data,
-                    Err(error) => GpuMetricsData {
-                        utilization_error: Some(format!("{error:#}")),
-                        memory_error: Some(format!("{error:#}")),
-                        ..Default::default()
-                    },
+                let system = if self.metric == Metric::Memory {
+                    match available_query(device, executable, DEVICE_QUERY, self.timeout)
+                        .and_then(|text| parse_device(&text))
+                    {
+                        Ok(mut data) => {
+                            data.utilization_percent = None;
+                            data.utilization_timestamp_ns = None;
+                            data.utilization_source.clear();
+                            data.utilization_error = None;
+                            data
+                        }
+                        Err(error) => GpuMetricsData {
+                            memory_error: Some(format!("{error:#}")),
+                            ..Default::default()
+                        },
+                    }
+                } else {
+                    GpuMetricsData::default()
                 };
-                let memory_result =
+                let memory_result = if self.metric == Metric::Memory {
                     available_query(memory, executable, PROCESS_QUERY, self.timeout)
-                        .and_then(|text| parse_process_memory(&text));
+                        .and_then(|text| parse_process_memory(&text))
+                } else {
+                    Ok(BTreeMap::new())
+                };
                 let memory_time = timestamp_ns();
-                let utilization_result =
+                let utilization_result = if self.metric == Metric::ProcessUtilization {
                     available_query(utilization, executable, UTILIZATION_QUERY, self.timeout)
-                        .and_then(|text| parse_process_utilization(&text));
+                        .and_then(|text| parse_process_utilization(&text))
+                } else {
+                    Ok(BTreeMap::new())
+                };
                 let utilization_time = timestamp_ns();
                 let missing = GpuMetricsData {
                     memory_source: "nvidia-smi/compute-apps/used_memory".into(),
@@ -609,17 +697,27 @@ mod tests {
             &executable,
             "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$0.calls\"\ncase \"$1\" in\n --query-gpu=*) echo 'Thor, 42, N/A, N/A';;\n --query-compute-apps=*)\n if [ -f \"$0.newstat\" ]; then mv \"$0.newstat\" \"${0%/*}/42/stat\"; fi\n echo '42, 16';;\n pmon) exit 3;;\n *) exit 9;;\nesac\n",
         );
-        let mut collector = GpuAccountingCollector::probe(
+        let collectors = GpuAccountingCollector::probe(
             dir.path().join("no-nvmap"),
             executable.clone(),
             Duration::from_secs(1),
             dir.path().into(),
             selector(),
         )
-        .unwrap();
+        .unwrap()
+        .split();
+        assert!(collectors.process_utilization.is_err());
+        let mut load = collectors.system_utilization.unwrap();
+        let mut collector = collectors.memory.unwrap();
         for _ in 0..3 {
             let sample = collector.collect(&CollectContext::now()).unwrap();
-            assert_eq!(sample.system.utilization_percent, Some(42.0));
+            assert_eq!(
+                load.collect(&CollectContext::now())
+                    .unwrap()
+                    .utilization_percent,
+                42.0
+            );
+            assert!(sample.system.utilization_percent.is_none());
             assert!(sample.system.memory_used_bytes.is_none());
             let process = &sample.processes[&(42, 7)];
             assert_eq!(process.memory_used_bytes, Some(16 * MIB));
@@ -659,18 +757,30 @@ mod tests {
             &executable,
             "#!/bin/sh\ncase \"$1\" in\n --query-gpu=*) echo 'Thor, 42, 1000, 200';;\n --query-compute-apps=*) echo '42, 16';;\n pmon) printf '%s\\n' '# gpu pid type sm mem command' '0 42 C 8 - compute';;\nesac\n",
         );
-        let mut collector = GpuAccountingCollector::probe(
+        let collectors = GpuAccountingCollector::probe(
             dir.path().join("no-nvmap"),
             executable.clone(),
             Duration::from_secs(1),
             dir.path().into(),
             selector(),
         )
-        .unwrap();
-        let sample = collector.collect(&CollectContext::now()).unwrap();
-        assert_eq!(sample.system.utilization_percent, Some(42.0));
+        .unwrap()
+        .split();
+        let mut memory = collectors.memory.unwrap();
+        let mut utilization = collectors.process_utilization.unwrap();
+        let mut load = collectors.system_utilization.unwrap();
+        assert_eq!(
+            load.collect(&CollectContext::now())
+                .unwrap()
+                .utilization_percent,
+            42.0
+        );
+        let sample = memory.collect(&CollectContext::now()).unwrap();
         assert_eq!(sample.system.memory_used_bytes, Some(200 * MIB));
+        assert!(sample.processes[&(42, 7)].utilization_percent.is_none());
+        let sample = utilization.collect(&CollectContext::now()).unwrap();
         assert_eq!(sample.processes[&(42, 7)].utilization_percent, Some(8.0));
+        assert!(sample.system.memory_used_bytes.is_none());
         script(&executable, "#!/bin/sh\nexec sleep 30\n");
         assert!(
             command(&executable, DEVICE_QUERY, Duration::from_millis(50))

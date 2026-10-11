@@ -12,9 +12,10 @@ pub struct Cli {
     /// Configuration file, relative to the working directory unless an absolute path is given.
     #[arg(short, long, default_value = "config/syslens.toml")]
     pub config: PathBuf,
+    /// Message publication interval; collector intervals are configured in [sampling].
     #[arg(long)]
     pub interval_ms: Option<u64>,
-    /// Stop after this many sampling rounds. The first round establishes CPU baselines.
+    /// Stop after this many publication rounds. Collectors run independently.
     #[arg(long)]
     pub samples: Option<u64>,
     /// Collect these PIDs instead of the configured process selector.
@@ -42,6 +43,7 @@ pub struct Config {
     pub interval_ms: u64,
     pub samples: Option<u64>,
     pub proc_root: PathBuf,
+    pub sampling: SamplingConfig,
     pub processes: ProcessConfig,
     pub gpu: GpuConfig,
     pub recording: RecordingConfig,
@@ -50,13 +52,43 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            interval_ms: 1000,
+            interval_ms: 100,
             samples: None,
             proc_root: "/proc".into(),
+            sampling: SamplingConfig::default(),
             processes: ProcessConfig::default(),
             gpu: GpuConfig::default(),
             recording: RecordingConfig::default(),
             foxglove: FoxgloveConfig::default(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SamplingConfig {
+    pub system_cpu_ms: u64,
+    pub system_memory_ms: u64,
+    pub process_cpu_ms: u64,
+    pub process_memory_ms: u64,
+    pub thread_cpu_ms: u64,
+    pub gpu_utilization_ms: u64,
+    pub gpu_memory_ms: u64,
+    pub process_gpu_utilization_ms: u64,
+    pub stale_after_periods: u32,
+}
+impl Default for SamplingConfig {
+    fn default() -> Self {
+        Self {
+            system_cpu_ms: 100,
+            system_memory_ms: 200,
+            process_cpu_ms: 100,
+            process_memory_ms: 200,
+            thread_cpu_ms: 100,
+            gpu_utilization_ms: 100,
+            gpu_memory_ms: 500,
+            process_gpu_utilization_ms: 1000,
+            stale_after_periods: 3,
         }
     }
 }
@@ -190,7 +222,37 @@ impl Config {
         Ok(config)
     }
     fn validate(&mut self) -> Result<()> {
-        ensure!(self.interval_ms > 0, "interval_ms must be positive");
+        ensure!(
+            (1..=86_400_000).contains(&self.interval_ms),
+            "interval_ms must be between 1 ms and 24 hours"
+        );
+        let sampling = &self.sampling;
+        for (name, value) in [
+            ("system_cpu_ms", sampling.system_cpu_ms),
+            ("system_memory_ms", sampling.system_memory_ms),
+            ("process_cpu_ms", sampling.process_cpu_ms),
+            ("process_memory_ms", sampling.process_memory_ms),
+            ("thread_cpu_ms", sampling.thread_cpu_ms),
+            ("gpu_utilization_ms", sampling.gpu_utilization_ms),
+            ("gpu_memory_ms", sampling.gpu_memory_ms),
+            (
+                "process_gpu_utilization_ms",
+                sampling.process_gpu_utilization_ms,
+            ),
+        ] {
+            ensure!(
+                (1..=86_400_000).contains(&value),
+                "sampling.{name} must be between 1 ms and 24 hours"
+            );
+        }
+        ensure!(
+            sampling.process_gpu_utilization_ms >= 1000,
+            "sampling.process_gpu_utilization_ms must be at least 1000 for nvidia-smi pmon"
+        );
+        ensure!(
+            sampling.stale_after_periods > 0,
+            "sampling.stale_after_periods must be positive"
+        );
         ensure!(self.samples != Some(0), "samples must be positive");
         ensure!(
             self.recording.enabled || self.foxglove.enabled,
@@ -228,5 +290,43 @@ mod tests {
             Config::load(Cli::parse_from(["syslens", "--pid", "1,1,2", "--no-gpu"])).unwrap();
         assert_eq!(config.processes.pids, vec![1, 2]);
         assert!(!config.gpu.enabled);
+    }
+
+    #[test]
+    fn independent_periods_load_and_invalid_periods_are_rejected() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), "interval_ms = 50\n[sampling]\nsystem_cpu_ms = 70\nsystem_memory_ms = 350\nprocess_cpu_ms = 90\nprocess_memory_ms = 270\nthread_cpu_ms = 120\ngpu_utilization_ms = 150\ngpu_memory_ms = 700\nprocess_gpu_utilization_ms = 2000\nstale_after_periods = 4\n").unwrap();
+        let config = Config::load(Cli::parse_from([
+            "syslens",
+            "--config",
+            file.path().to_str().unwrap(),
+            "--interval-ms",
+            "25",
+        ]))
+        .unwrap();
+        assert_eq!(config.interval_ms, 25);
+        assert_eq!(config.sampling.system_cpu_ms, 70);
+        assert_eq!(config.sampling.system_memory_ms, 350);
+        assert_eq!(config.sampling.process_cpu_ms, 90);
+        assert_eq!(config.sampling.process_memory_ms, 270);
+        assert_eq!(config.sampling.thread_cpu_ms, 120);
+        assert_eq!(config.sampling.gpu_utilization_ms, 150);
+        assert_eq!(config.sampling.gpu_memory_ms, 700);
+        assert_eq!(config.sampling.process_gpu_utilization_ms, 2000);
+        assert_eq!(config.sampling.stale_after_periods, 4);
+        for settings in [
+            "system_cpu_ms = 0",
+            "thread_cpu_ms = 0",
+            "gpu_memory_ms = 0",
+            "process_gpu_utilization_ms = 999",
+            "stale_after_periods = 0",
+            "system_memory_ms = 86400001",
+        ] {
+            let mut config: Config = toml::from_str(&format!("[sampling]\n{settings}")).unwrap();
+            assert!(
+                config.validate().is_err(),
+                "accepted invalid setting: {settings}"
+            );
+        }
     }
 }

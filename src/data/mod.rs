@@ -19,8 +19,15 @@ pub struct ProcessData {
     pub name: String,
     pub cpu_percent: Option<f64>,
     pub cpu_ticks: u64,
+}
+#[derive(Debug)]
+pub struct ProcessMemoryData {
     pub rss_bytes: u64,
     pub virtual_bytes: u64,
+}
+#[derive(Debug, Default)]
+pub struct ProcessMemory {
+    pub items: BTreeMap<(u32, u64), ProcessMemoryData>,
 }
 #[derive(Debug, Default)]
 pub struct Processes {

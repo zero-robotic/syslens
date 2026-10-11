@@ -1,5 +1,8 @@
 use crate::{
-    data::{CpuData, GpuAccountingData, GpuData, GpuMetricsData, MemoryData, Processes, Threads},
+    data::{
+        CpuData, GpuAccountingData, GpuData, GpuMetricsData, MemoryData, ProcessMemory, Processes,
+        Threads,
+    },
     framework::{Assembler, Batch, Key, Sample, StreamDescriptor},
     protocol::{self, pb},
 };
@@ -21,11 +24,19 @@ impl Identity {
             inputs: dependencies
                 .iter()
                 .map(|name| {
-                    let (time, error) = batch.status(name);
+                    let status = batch.status(name);
                     pb::InputStatus {
                         collector: (*name).into(),
-                        timestamp: Some(protocol::timestamp(time)),
-                        error,
+                        timestamp: status.captured_at_ns.map(protocol::timestamp),
+                        error: status.error,
+                        interval_ms: status.interval_ms,
+                        actual_interval_ms: status.actual_interval_ms,
+                        collection_duration_ms: status.collection_duration_ms,
+                        age_ms: status.age_ms,
+                        stale: status.stale,
+                        sample_sequence: status.sample_sequence,
+                        missed_periods: status.missed_periods,
+                        skipped_samples: status.skipped_samples,
                     }
                 })
                 .collect(),
@@ -64,8 +75,10 @@ fn gpu_metrics(data: &GpuMetricsData) -> pb::GpuMetrics {
 pub struct GpuInputs {
     pub utilization: Option<Key<GpuData>>,
     pub accounting: Option<Key<GpuAccountingData>>,
+    pub process_utilization: Option<Key<GpuAccountingData>>,
     pub utilization_error: Option<String>,
     pub accounting_error: Option<String>,
+    pub process_utilization_error: Option<String>,
 }
 impl GpuInputs {
     fn system(&self, batch: &Batch) -> pb::GpuMetrics {
@@ -78,7 +91,7 @@ impl GpuInputs {
                 memory_error: self
                     .accounting_error
                     .clone()
-                    .or_else(|| self.accounting.and_then(|key| batch.status(key.name).1)),
+                    .or_else(|| self.accounting.and_then(|key| batch.status(key.name).error)),
                 ..Default::default()
             });
         if let Some(key) = self.utilization {
@@ -100,23 +113,42 @@ impl GpuInputs {
         gpu_metrics(&data)
     }
     fn process(&self, batch: &Batch, pid: u32, start: u64) -> pb::GpuMetrics {
-        if let Some(data) = self.accounting.and_then(|key| batch.get(key).ok()) {
-            return gpu_metrics(
-                data.processes
-                    .get(&(pid, start))
-                    .unwrap_or(&data.missing_process),
-            );
+        let mut data = if let Some(data) = self.accounting.and_then(|key| batch.get(key).ok()) {
+            data.processes
+                .get(&(pid, start))
+                .unwrap_or(&data.missing_process)
+                .clone()
+        } else {
+            GpuMetricsData {
+                memory_error: self
+                    .accounting_error
+                    .clone()
+                    .or_else(|| self.accounting.and_then(|key| batch.status(key.name).error)),
+                ..Default::default()
+            }
+        };
+        if let Some(usage) = self.process_utilization.and_then(|key| batch.get(key).ok()) {
+            let usage = usage
+                .processes
+                .get(&(pid, start))
+                .unwrap_or(&usage.missing_process);
+            data.utilization_percent = usage.utilization_percent;
+            data.utilization_source = usage.utilization_source.clone();
+            data.utilization_timestamp_ns = usage.utilization_timestamp_ns;
+            data.utilization_error = usage.utilization_error.clone();
+        } else {
+            data.utilization_percent = None;
+            data.utilization_timestamp_ns = None;
+            data.utilization_error = self
+                .process_utilization_error
+                .clone()
+                .or_else(|| {
+                    self.process_utilization
+                        .and_then(|key| batch.status(key.name).error)
+                })
+                .or(data.utilization_error);
         }
-        let error = self
-            .accounting_error
-            .clone()
-            .or_else(|| self.accounting.and_then(|key| batch.status(key.name).1))
-            .unwrap_or_else(|| "GPU process metrics unavailable".into());
-        pb::GpuMetrics {
-            utilization_error: Some(error.clone()),
-            memory_error: Some(error),
-            ..Default::default()
-        }
+        gpu_metrics(&data)
     }
 }
 
@@ -184,6 +216,7 @@ impl Assembler for SystemAssembler {
 
 pub struct ProcessAssembler {
     processes: Key<Processes>,
+    memory: Key<ProcessMemory>,
     threads: Option<Key<Threads>>,
     gpu: Option<GpuInputs>,
     dependencies: Vec<&'static str>,
@@ -193,19 +226,22 @@ pub struct ProcessAssembler {
 impl ProcessAssembler {
     pub fn new(
         processes: Key<Processes>,
+        memory: Key<ProcessMemory>,
         threads: Option<Key<Threads>>,
         gpu: Option<GpuInputs>,
         identity: Identity,
     ) -> Self {
-        let mut dependencies = vec![processes.name];
+        let mut dependencies = vec![processes.name, memory.name];
         if let Some(key) = threads {
             dependencies.push(key.name);
         }
-        if let Some(key) = gpu.as_ref().and_then(|gpu| gpu.accounting) {
-            dependencies.push(key.name);
+        if let Some(gpu) = &gpu {
+            dependencies.extend(gpu.accounting.map(|key| key.name));
+            dependencies.extend(gpu.process_utilization.map(|key| key.name));
         }
         Self {
             processes,
+            memory,
             threads,
             gpu,
             dependencies,
@@ -223,6 +259,7 @@ impl Assembler for ProcessAssembler {
     }
     fn assemble(&mut self, batch: &Batch) -> Result<Vec<Sample>> {
         let processes = batch.get(self.processes).ok();
+        let memory = batch.get(self.memory).ok();
         let threads = self.threads.and_then(|key| batch.get(key).ok());
         let groups: HashMap<_, _> = threads
             .into_iter()
@@ -235,6 +272,8 @@ impl Assembler for ProcessAssembler {
             .map(|process| {
                 let id = self.identity.process_id(process.pid, process.start_ticks);
                 let group = groups.get(&(process.pid, process.start_ticks));
+                let memory =
+                    memory.and_then(|memory| memory.items.get(&(process.pid, process.start_ticks)));
                 let threads_error = if self.threads.is_some() {
                     match group {
                         Some(group) => group.error.clone(),
@@ -251,8 +290,8 @@ impl Assembler for ProcessAssembler {
                     instance_id: id.clone(),
                     name: process.name.clone(),
                     cpu_percent: process.cpu_percent,
-                    rss_bytes: process.rss_bytes,
-                    virtual_bytes: process.virtual_bytes,
+                    rss_bytes: memory.map(|memory| memory.rss_bytes),
+                    virtual_bytes: memory.map(|memory| memory.virtual_bytes),
                     cpu_time_ticks: process.cpu_ticks,
                     threads: group
                         .into_iter()
@@ -361,12 +400,13 @@ mod tests {
     }
     #[test]
     fn never_joins_threads_or_gpu_data_from_a_reused_pid() {
-        use crate::data::{ProcessData, ThreadGroup};
+        use crate::data::{ProcessData, ProcessMemoryData, ThreadGroup};
         let proc_key = Key::new("process");
         let thread_key = Key::new("threads");
         let gpu_key = Key::new("gpu_accounting");
         let gpu_inputs = GpuInputs {
             accounting: Some(gpu_key),
+            process_utilization: Some(Key::new("process_gpu")),
             ..Default::default()
         };
         let mut system = SystemAssembler::new(
@@ -375,8 +415,13 @@ mod tests {
             Some(gpu_inputs.clone()),
             identity(),
         );
-        let mut assembler =
-            ProcessAssembler::new(proc_key, Some(thread_key), Some(gpu_inputs), identity());
+        let mut assembler = ProcessAssembler::new(
+            proc_key,
+            Key::new("process_memory"),
+            Some(thread_key),
+            Some(gpu_inputs),
+            identity(),
+        );
         let mut batch = Batch::for_test(0);
         batch.insert(
             proc_key,
@@ -387,8 +432,6 @@ mod tests {
                     name: "new".into(),
                     cpu_percent: None,
                     cpu_ticks: 0,
-                    rss_bytes: 0,
-                    virtual_bytes: 0,
                 }],
                 skipped: 0,
             },
@@ -426,11 +469,24 @@ mod tests {
             },
         };
         batch.insert(gpu_key, accounting(8));
+        batch.insert(Key::new("process_gpu"), accounting(8));
+        let memory = |start| ProcessMemory {
+            items: [(
+                (42, start),
+                ProcessMemoryData {
+                    rss_bytes: 2048,
+                    virtual_bytes: 4096,
+                },
+            )]
+            .into(),
+        };
+        batch.insert(Key::new("process_memory"), memory(8));
         let message =
             pb::ProcessSample::decode(assembler.assemble(&batch).unwrap()[0].payload.clone())
                 .unwrap();
         assert!(message.processes[0].threads_error.is_some());
         assert_eq!(message.processes[0].instance_id, "boot:42:9");
+        assert!(message.processes[0].rss_bytes.is_none());
         assert!(
             message.processes[0]
                 .gpu
@@ -448,10 +504,14 @@ mod tests {
                 .is_some()
         );
         batch.insert(gpu_key, accounting(9));
+        batch.insert(Key::new("process_gpu"), accounting(9));
+        batch.insert(Key::new("process_memory"), memory(9));
         let message =
             pb::ProcessSample::decode(assembler.assemble(&batch).unwrap()[0].payload.clone())
                 .unwrap();
         let process_gpu = message.processes[0].gpu.as_ref().unwrap();
+        assert_eq!(message.processes[0].rss_bytes, Some(2048));
+        assert_eq!(message.processes[0].virtual_bytes, Some(4096));
         assert_eq!(process_gpu.utilization_percent, Some(8.0));
         assert_eq!(process_gpu.memory_used_bytes, Some(1024));
         let message =

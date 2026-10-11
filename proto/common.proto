@@ -7,6 +7,14 @@ message InputStatus {
   string collector = 1;
   google.protobuf.Timestamp timestamp = 2;
   optional string error = 3;
+  uint64 interval_ms = 4; // Configured collection period.
+  optional double actual_interval_ms = 5; // Monotonic start-to-start interval.
+  optional double collection_duration_ms = 6;
+  optional double age_ms = 7; // Age since collection started, at publication.
+  bool stale = 8; // Stale inputs are excluded from the assembled payload.
+  uint64 sample_sequence = 9; // Zero until the first attempt finishes.
+  uint64 missed_periods = 10; // Cumulative deadlines skipped by this collector.
+  uint64 skipped_samples = 11; // Completed samples superseded before publication.
 }
 message Header {
   google.protobuf.Timestamp timestamp = 1;

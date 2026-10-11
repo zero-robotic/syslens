@@ -1,7 +1,25 @@
 # Loaded by default, relative to the working directory. CLI options override this file.
-interval_ms = 1000
-# samples = 60 # Omit for continuous collection.
+# Message publication period; collectors use the independent periods below.
+interval_ms = 100
+# samples = 60 # Number of publication rounds. Omit for continuous collection.
 proc_root = "/proc"
+
+[sampling]
+# All periods are milliseconds. Changes take effect after restarting syslens.
+# System total CPU and per-core CPU come from the same /proc/stat observation.
+system_cpu_ms = 100
+system_memory_ms = 200
+process_cpu_ms = 100
+process_memory_ms = 200
+thread_cpu_ms = 100
+# Also controls the persistent tegrastats --interval when that source is used.
+gpu_utilization_ms = 100
+# System and process GPU memory share one driver snapshot.
+gpu_memory_ms = 500
+# nvidia-smi pmon supports periods of at least 1000 ms.
+process_gpu_utilization_ms = 1000
+# Exclude inputs older than their period multiplied by this value.
+stale_after_periods = 3
 
 [processes]
 enabled = true

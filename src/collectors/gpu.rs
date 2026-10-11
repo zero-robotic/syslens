@@ -10,7 +10,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const LOAD_PATHS: &[&str] = &[
@@ -26,6 +26,7 @@ pub struct JetsonCollector {
     executable: PathBuf,
     tegrastats: Option<Tegrastats>,
     timeout: Duration,
+    interval: Duration,
 }
 impl JetsonCollector {
     /// Verify that a valid GPU observation is available before registering this collector.
@@ -35,6 +36,7 @@ impl JetsonCollector {
         load: Option<PathBuf>,
         executable: PathBuf,
         timeout: Duration,
+        interval: Duration,
     ) -> Result<Self> {
         let load = load.or_else(|| {
             LOAD_PATHS
@@ -47,6 +49,7 @@ impl JetsonCollector {
             executable,
             tegrastats: None,
             timeout,
+            interval,
         };
         collector
             .collect(&CollectContext::now())
@@ -74,7 +77,7 @@ impl Collector for JetsonCollector {
             });
         }
         if self.tegrastats.is_none() {
-            self.tegrastats = Some(Tegrastats::start(&self.executable)?);
+            self.tegrastats = Some(Tegrastats::start(&self.executable, self.interval)?);
         }
         let result = self.tegrastats.as_mut().unwrap().next(self.timeout);
         if result.is_err() {
@@ -104,13 +107,15 @@ fn parse_gr3d(line: &str) -> Result<f64> {
 
 struct Tegrastats {
     child: Child,
-    receiver: Receiver<(u64, String)>,
+    receiver: Receiver<(Instant, u64, String)>,
     reader: Option<JoinHandle<()>>,
+    interval: Duration,
 }
 impl Tegrastats {
-    fn start(executable: &Path) -> Result<Self> {
+    fn start(executable: &Path, interval: Duration) -> Result<Self> {
         let mut child = Command::new(executable)
-            .args(["--interval", "100"])
+            .arg("--interval")
+            .arg(interval.as_millis().to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -131,7 +136,7 @@ impl Tegrastats {
                 let Ok(line) = line else {
                     break;
                 };
-                match sender.try_send((timestamp_ns(), line)) {
+                match sender.try_send((Instant::now(), timestamp_ns(), line)) {
                     Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
                     Err(mpsc::TrySendError::Disconnected(_)) => break,
                 }
@@ -141,15 +146,27 @@ impl Tegrastats {
             child,
             receiver,
             reader: Some(reader),
+            interval,
         })
     }
     fn next(&mut self, timeout: Duration) -> Result<GpuData> {
-        // Discard buffered lines; wait for a new observation for this batch.
-        while self.receiver.try_recv().is_ok() {}
-        let (observed_at_ns, line) = self
-            .receiver
-            .recv_timeout(timeout)
-            .map_err(|error| anyhow!("no fresh tegrastats sample: {error}"))?;
+        // Reuse only an unconsumed, recent observation from the persistent stream.
+        // Waiting for a post-call line every time would add up to a full period
+        // to each collection and halve the effective sampling rate.
+        let deadline = Instant::now() + timeout;
+        let mut latest = self.receiver.try_iter().last();
+        let (observed_at_ns, line) = loop {
+            let (received, timestamp, line) = match latest.take() {
+                Some(sample) => sample,
+                None => self
+                    .receiver
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .map_err(|error| anyhow!("no fresh tegrastats sample: {error}"))?,
+            };
+            if received.elapsed() <= self.interval.saturating_mul(2) {
+                break (timestamp, line);
+            }
+        };
         Ok(GpuData {
             utilization_percent: parse_gr3d(&line)?,
             source: "tegrastats/GR3D_FREQ".into(),
@@ -199,6 +216,7 @@ mod tests {
             Some(path.clone()),
             "tegrastats".into(),
             Duration::from_secs(1),
+            Duration::from_millis(100),
         )
         .unwrap();
         assert_eq!(
@@ -223,6 +241,7 @@ mod tests {
             None,
             dir.path().join("no-tegrastats"),
             Duration::from_secs(1),
+            Duration::from_millis(100),
         )
         .unwrap();
         fs::write(&path, "500\n").unwrap();
@@ -242,17 +261,38 @@ mod tests {
         let executable = dir.path().join("no-tegrastats");
         let timeout = Duration::from_secs(1);
         // Neither a sysfs node nor tegrastats is available.
-        assert!(JetsonCollector::probe(dir.path(), None, executable.clone(), timeout).is_err());
+        assert!(
+            JetsonCollector::probe(
+                dir.path(),
+                None,
+                executable.clone(),
+                timeout,
+                Duration::from_millis(100)
+            )
+            .is_err()
+        );
         // An explicitly configured but unreadable node is not considered available.
         assert!(
-            JetsonCollector::probe(dir.path(), Some(path.clone()), executable.clone(), timeout)
-                .is_err()
+            JetsonCollector::probe(
+                dir.path(),
+                Some(path.clone()),
+                executable.clone(),
+                timeout,
+                Duration::from_millis(100)
+            )
+            .is_err()
         );
         for contents in ["not-a-number", "NaN", "1001"] {
             fs::write(&path, contents).unwrap();
             assert!(
-                JetsonCollector::probe(dir.path(), Some(path.clone()), executable.clone(), timeout)
-                    .is_err()
+                JetsonCollector::probe(
+                    dir.path(),
+                    Some(path.clone()),
+                    executable.clone(),
+                    timeout,
+                    Duration::from_millis(100)
+                )
+                .is_err()
             );
         }
     }
@@ -271,10 +311,16 @@ mod tests {
         let executable = dir.path().join("tegrastats");
         executable_script(
             &executable,
-            "#!/bin/sh\nprintf 'started\\n' >> \"$0.starts\"\nwhile :; do\n  printf '%s\\n' 'GR3D_FREQ 42%@[1098,1098]'\n  sleep 0.02\ndone\n",
+            "#!/bin/sh\nprintf 'started\\n' >> \"$0.starts\"\nprintf '%s\\n' \"$*\" > \"$0.args\"\nwhile :; do\n  printf '%s\\n' 'GR3D_FREQ 42%@[1098,1098]'\n  sleep 0.02\ndone\n",
         );
-        let mut collector =
-            JetsonCollector::probe(dir.path(), None, executable, Duration::from_secs(2)).unwrap();
+        let mut collector = JetsonCollector::probe(
+            dir.path(),
+            None,
+            executable,
+            Duration::from_secs(2),
+            Duration::from_millis(37),
+        )
+        .unwrap();
         for _ in 0..3 {
             assert_eq!(
                 collector
@@ -285,6 +331,10 @@ mod tests {
             );
         }
         drop(collector);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("tegrastats.args")).unwrap(),
+            "--interval 37\n"
+        );
         assert_eq!(
             fs::read_to_string(dir.path().join("tegrastats.starts")).unwrap(),
             "started\n"
@@ -298,8 +348,13 @@ mod tests {
         let executable = dir.path().join("tegrastats");
         // exec keeps the sleeping process owned by the collector, allowing cleanup on timeout.
         executable_script(&executable, "#!/bin/sh\nexec sleep 30\n");
-        let result =
-            JetsonCollector::probe(dir.path(), None, executable, Duration::from_millis(50));
+        let result = JetsonCollector::probe(
+            dir.path(),
+            None,
+            executable,
+            Duration::from_millis(50),
+            Duration::from_millis(100),
+        );
         let error = result
             .err()
             .expect("a silent process must fail the startup probe");
