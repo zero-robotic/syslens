@@ -149,11 +149,18 @@ mod tests {
             1,
         )
         .unwrap();
-        let message = pb::GpuSample {
-            utilization_percent: Some(37.0),
+        let message = pb::SystemSample {
+            gpu: Some(pb::GpuMetrics {
+                utilization_percent: Some(37.0),
+                ..Default::default()
+            }),
             ..Default::default()
         };
-        let sample = protocol::encode(&message, protocol::stream("/gpu", "GpuSample"), 123456789);
+        let sample = protocol::encode(
+            &message,
+            protocol::stream("/syslens/system", "SystemSample"),
+            123456789,
+        );
         for _ in 0..3 {
             output.write(&sample).unwrap();
         }
@@ -173,16 +180,26 @@ mod tests {
                 .unwrap();
             assert_eq!(messages[0].log_time, 123456789);
             let schema = messages[0].channel.schema.as_ref().unwrap();
-            assert_eq!(schema.name, "syslens.v1.GpuSample");
+            assert_eq!(schema.name, "syslens.v1.SystemSample");
             let descriptor = prost_types::FileDescriptorSet::decode(schema.data.as_ref()).unwrap();
-            assert!(
-                descriptor
-                    .file
-                    .iter()
-                    .any(|file| file.name.as_deref() == Some("google/protobuf/timestamp.proto"))
-            );
+            let schema_files: std::collections::HashSet<_> = descriptor
+                .file
+                .iter()
+                .filter_map(|file| file.name.as_deref())
+                .collect();
+            assert!(schema_files.contains("google/protobuf/timestamp.proto"));
+            for file in &descriptor.file {
+                for dependency in &file.dependency {
+                    assert!(
+                        schema_files.contains(dependency.as_str()),
+                        "missing schema import {dependency}"
+                    );
+                }
+            }
             assert_eq!(
-                pb::GpuSample::decode(messages[0].data.as_ref())
+                pb::SystemSample::decode(messages[0].data.as_ref())
+                    .unwrap()
+                    .gpu
                     .unwrap()
                     .utilization_percent,
                 Some(37.0)

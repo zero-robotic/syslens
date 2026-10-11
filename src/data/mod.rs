@@ -54,3 +54,25 @@ pub struct GpuData {
     pub source: String,
     pub observed_at_ns: u64,
 }
+
+#[derive(Debug, Default, Clone)]
+pub struct GpuMetricsData {
+    pub utilization_percent: Option<f64>,
+    pub memory_used_bytes: Option<u64>,
+    pub memory_total_bytes: Option<u64>,
+    pub utilization_source: String,
+    pub memory_source: String,
+    pub memory_scope: String,
+    pub utilization_timestamp_ns: Option<u64>,
+    pub memory_timestamp_ns: Option<u64>,
+    pub utilization_error: Option<String>,
+    pub memory_error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct GpuAccountingData {
+    pub system: GpuMetricsData,
+    // Identity includes start_ticks, so a reused PID cannot inherit another process's GPU data.
+    pub processes: BTreeMap<(u32, u64), GpuMetricsData>,
+    pub missing_process: GpuMetricsData,
+}

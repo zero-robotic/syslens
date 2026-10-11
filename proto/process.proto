@@ -1,0 +1,33 @@
+syntax = "proto3";
+package syslens.v1;
+import "common.proto";
+
+// Preserve field numbers; reserve numbers and names when removing fields.
+message Thread {
+  uint32 tid = 1;
+  uint64 start_ticks = 2;
+  string instance_id = 3;
+  string name = 4;
+  // One fully occupied logical CPU = 100%. Absent until a baseline exists.
+  optional double cpu_percent = 5;
+  uint64 cpu_time_ticks = 6;
+}
+message Process {
+  uint32 pid = 1;
+  uint64 start_ticks = 2;
+  string instance_id = 3;
+  string name = 4;
+  // May exceed 100% when multiple threads execute concurrently.
+  optional double cpu_percent = 5;
+  uint64 rss_bytes = 6;
+  uint64 virtual_bytes = 7;
+  uint64 cpu_time_ticks = 8;
+  repeated Thread threads = 9;
+  optional string threads_error = 10;
+  GpuMetrics gpu = 11;
+}
+message ProcessSample {
+  Header header = 1;
+  repeated Process processes = 2;
+  uint32 skipped_processes = 3;
+}

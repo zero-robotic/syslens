@@ -85,6 +85,8 @@ pub struct GpuConfig {
     pub sys_root: PathBuf,
     pub load_path: Option<PathBuf>,
     pub tegrastats: PathBuf,
+    pub nvmap_clients_path: Option<PathBuf>,
+    pub nvidia_smi: PathBuf,
     pub timeout_ms: u64,
 }
 impl Default for GpuConfig {
@@ -94,6 +96,8 @@ impl Default for GpuConfig {
             sys_root: "/sys".into(),
             load_path: None,
             tegrastats: "tegrastats".into(),
+            nvmap_clients_path: None,
+            nvidia_smi: "nvidia-smi".into(),
             timeout_ms: 1500,
         }
     }

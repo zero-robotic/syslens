@@ -12,12 +12,17 @@ pids = []
 names = []
 
 [gpu]
-# When enabled, probe once at startup. If unavailable, disable GPU for this run.
+# Probe each GPU capability once at startup; unavailable sources stay disabled for this run.
 enabled = true
 sys_root = "/sys"
 # NVIDIA Jetson: automatically find the GPU load sysfs node, otherwise use tegrastats.
 # load_path = "/sys/devices/gpu.0/load"
 tegrastats = "tegrastats"
+# Orin: default is <sys_root>/kernel/debug/nvmap/iovmm/clients (requires read permission).
+# nvmap_clients_path = "/sys/kernel/debug/nvmap/iovmm/clients"
+# Thor: use GPU index 0 via nvidia-smi when nvmap is unavailable; Orin stubs are rejected.
+nvidia_smi = "nvidia-smi"
+# Timeout per tegrastats observation / nvidia-smi command.
 timeout_ms = 1500
 
 [recording]

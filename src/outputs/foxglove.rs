@@ -76,11 +76,14 @@ mod tests {
     fn websocket_advertises_protobuf_and_delivers_timestamped_payload() {
         let mut output = FoxgloveOutput::new("127.0.0.1", 0).unwrap();
         let sample = protocol::encode(
-            &pb::GpuSample {
-                utilization_percent: Some(42.5),
+            &pb::SystemSample {
+                gpu: Some(pb::GpuMetrics {
+                    utilization_percent: Some(42.5),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
-            protocol::stream("/syslens/gpu", "GpuSample"),
+            protocol::stream("/syslens/system", "SystemSample"),
             1_234_567_890,
         );
         output.write(&sample).unwrap();
@@ -105,11 +108,11 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .iter()
-                        .find(|channel| channel["topic"] == "/syslens/gpu")
+                        .find(|channel| channel["topic"] == "/syslens/system")
                         .unwrap();
                     assert_eq!(channel["encoding"], "protobuf");
                     assert_eq!(channel["schemaEncoding"], "protobuf");
-                    assert_eq!(channel["schemaName"], "syslens.v1.GpuSample");
+                    assert_eq!(channel["schemaName"], "syslens.v1.SystemSample");
                     assert!(!channel["schema"].as_str().unwrap().is_empty());
                     break channel["id"].as_u64().unwrap();
                 }
@@ -126,7 +129,7 @@ mod tests {
             ))
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !output.channels["/syslens/gpu"].has_sinks() {
+        while !output.channels["/syslens/system"].has_sinks() {
             assert!(Instant::now() < deadline, "subscription was not registered");
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -141,7 +144,9 @@ mod tests {
                 );
                 assert_eq!(&frame[13..], sample.payload.as_ref());
                 assert_eq!(
-                    pb::GpuSample::decode(&frame[13..])
+                    pb::SystemSample::decode(&frame[13..])
+                        .unwrap()
+                        .gpu
                         .unwrap()
                         .utilization_percent,
                     Some(42.5)

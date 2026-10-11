@@ -1,20 +1,9 @@
 syntax = "proto3";
 package syslens.v1;
+import "common.proto";
 import "google/protobuf/timestamp.proto";
 
 // Preserve field numbers; reserve numbers and names when removing fields.
-message InputStatus {
-  string collector = 1;
-  google.protobuf.Timestamp timestamp = 2;
-  optional string error = 3;
-}
-message Header {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 batch_id = 2;
-  string host = 3;
-  string boot_id = 4;
-  repeated InputStatus inputs = 5;
-}
 message CpuCore {
   uint32 core_id = 1;
   optional double usage_percent = 2;
@@ -35,35 +24,11 @@ message SystemSample {
   Header header = 1;
   Cpu cpu = 2;
   Memory memory = 3;
-}
-message Thread {
-  uint32 tid = 1;
-  uint64 start_ticks = 2;
-  string instance_id = 3;
-  string name = 4;
-  // One fully occupied logical CPU = 100%. Absent until a baseline exists.
-  optional double cpu_percent = 5;
-  uint64 cpu_time_ticks = 6;
-}
-message Process {
-  uint32 pid = 1;
-  uint64 start_ticks = 2;
-  string instance_id = 3;
-  string name = 4;
-  // May exceed 100% when multiple threads execute concurrently.
-  optional double cpu_percent = 5;
-  uint64 rss_bytes = 6;
-  uint64 virtual_bytes = 7;
-  uint64 cpu_time_ticks = 8;
-  repeated Thread threads = 9;
-  optional string threads_error = 10;
-}
-message ProcessSample {
-  Header header = 1;
-  repeated Process processes = 2;
-  uint32 skipped_processes = 3;
+  GpuMetrics gpu = 4;
 }
 message GpuSample {
+  // Legacy schema only. New recordings publish SystemSample and ProcessSample.
+  option deprecated = true;
   Header header = 1;
   string device = 2;
   optional double utilization_percent = 3;

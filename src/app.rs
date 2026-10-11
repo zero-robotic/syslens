@@ -1,14 +1,15 @@
 use crate::{
-    assemblers::{GpuAssembler, Identity, ProcessAssembler, SystemAssembler},
+    assemblers::{GpuInputs, Identity, ProcessAssembler, SystemAssembler},
     collectors::{
         cpu::CpuCollector,
         gpu::JetsonCollector,
+        gpu_accounting::GpuAccountingCollector,
         memory::MemoryCollector,
         process::{ProcessCollector, Selector},
         threads::ThreadCollector,
     },
     config::{Cli, Config},
-    data::{CpuData, GpuData, MemoryData, Processes, Threads},
+    data::{CpuData, GpuAccountingData, GpuData, MemoryData, Processes, Threads},
     framework::{Dispatcher, Key, Overflow, Runtime},
     outputs::{foxglove::FoxgloveOutput, mcap::McapOutput},
 };
@@ -72,13 +73,64 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let memory = Key::<MemoryData>::new("memory");
     runtime.add_collector(cpu, CpuCollector::new(&config.proc_root))?;
     runtime.add_collector(memory, MemoryCollector::new(&config.proc_root))?;
-    runtime.add_assembler(SystemAssembler::new(cpu, memory, identity.clone()))?;
+    let selector = Selector {
+        pids: config.processes.pids,
+        names: config.processes.names,
+    };
+    let gpu = if config.gpu.enabled {
+        let mut inputs = GpuInputs::default();
+        match JetsonCollector::probe(
+            &config.gpu.sys_root,
+            config.gpu.load_path,
+            config.gpu.tegrastats,
+            Duration::from_millis(config.gpu.timeout_ms),
+        ) {
+            Ok(collector) => {
+                let key = Key::<GpuData>::new("gpu_utilization");
+                runtime.add_collector(key, collector)?;
+                inputs.utilization = Some(key);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Jetson sysfs/tegrastats disabled for this run (startup probe failed): {error:#}"
+                );
+                inputs.utilization_error = Some(format!("{error:#}"));
+            }
+        }
+        match GpuAccountingCollector::probe(
+            config
+                .gpu
+                .nvmap_clients_path
+                .unwrap_or_else(|| config.gpu.sys_root.join("kernel/debug/nvmap/iovmm/clients")),
+            config.gpu.nvidia_smi,
+            Duration::from_millis(config.gpu.timeout_ms),
+            config.proc_root.clone(),
+            config.processes.enabled.then(|| selector.clone()),
+        ) {
+            Ok(collector) => {
+                let key = Key::<GpuAccountingData>::new("gpu_accounting");
+                runtime.add_collector(key, collector)?;
+                inputs.accounting = Some(key);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Jetson GPU accounting disabled for this run (startup probe failed): {error:#}"
+                );
+                inputs.accounting_error = Some(format!("{error:#}"));
+            }
+        }
+        Some(inputs)
+    } else {
+        None
+    };
+    runtime.add_assembler(SystemAssembler::new(
+        cpu,
+        memory,
+        gpu.clone(),
+        identity.clone(),
+    ))?;
     if config.processes.enabled {
         let key = Key::<Processes>::new("processes");
-        let selector = Selector {
-            pids: config.processes.pids,
-            names: config.processes.names,
-        };
         runtime.add_collector(
             key,
             ProcessCollector::new(config.proc_root.clone(), selector.clone())?,
@@ -93,24 +145,7 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         } else {
             None
         };
-        runtime.add_assembler(ProcessAssembler::new(key, thread_key, identity.clone()))?;
-    }
-    if config.gpu.enabled {
-        match JetsonCollector::probe(
-            &config.gpu.sys_root,
-            config.gpu.load_path,
-            config.gpu.tegrastats,
-            Duration::from_millis(config.gpu.timeout_ms),
-        ) {
-            Ok(collector) => {
-                let key = Key::<GpuData>::new("gpu");
-                runtime.add_collector(key, collector)?;
-                runtime.add_assembler(GpuAssembler::new(key, memory, identity))?;
-            }
-            Err(error) => {
-                eprintln!("Jetson GPU disabled for this run (startup probe failed): {error:#}");
-            }
-        }
+        runtime.add_assembler(ProcessAssembler::new(key, thread_key, gpu, identity))?;
     }
     runtime.run(
         Duration::from_millis(config.interval_ms),
@@ -146,6 +181,7 @@ mod tests {
             config.gpu.enabled = enabled;
             config.gpu.sys_root = directory.path().join("no-sysfs");
             config.gpu.tegrastats = executable;
+            config.gpu.nvidia_smi = directory.path().join("no-nvidia-smi");
             config.gpu.timeout_ms = 1000;
 
             run_config(config, Arc::new(AtomicBool::new(false))).unwrap();
@@ -187,6 +223,17 @@ mod tests {
         config.foxglove.enabled = false;
         config.recording.directory = directory.path().join("recordings");
         config.gpu.load_path = Some(load);
+        config.gpu.nvidia_smi = directory.path().join("no-nvidia-smi");
+        let nvmap = directory.path().join("clients");
+        fs::write(
+            &nvmap,
+            format!(
+                "CLIENT PROCESS PID SIZE\nuser syslens {} 16K\ntotal 32K\n",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        config.gpu.nvmap_clients_path = Some(nvmap);
         config.processes.pids = vec![std::process::id()];
         let busy_stop = Arc::new(AtomicBool::new(false));
         let busy_signal = busy_stop.clone();
@@ -208,10 +255,9 @@ mod tests {
             .path();
         let bytes = fs::read(file).unwrap();
         let summary = mcap::Summary::read(&bytes).unwrap().unwrap();
-        assert_eq!(summary.stats.unwrap().message_count, 12);
+        assert_eq!(summary.stats.unwrap().message_count, 8);
         let mut systems = Vec::new();
         let mut processes = Vec::new();
-        let mut gpus = Vec::new();
         for message in mcap::MessageStream::new(&bytes).unwrap() {
             let message = message.unwrap();
             match message.channel.topic.as_str() {
@@ -221,11 +267,10 @@ mod tests {
                 "/syslens/processes" => {
                     processes.push(pb::ProcessSample::decode(message.data.as_ref()).unwrap())
                 }
-                "/syslens/gpu" => gpus.push(pb::GpuSample::decode(message.data.as_ref()).unwrap()),
                 topic => panic!("unexpected topic {topic}"),
             }
         }
-        assert_eq!((systems.len(), processes.len(), gpus.len()), (4, 4, 4));
+        assert_eq!((systems.len(), processes.len()), (4, 4));
         assert!(systems[0].cpu.as_ref().unwrap().usage_percent.is_none());
         assert!(
             systems[1..]
@@ -260,9 +305,20 @@ mod tests {
                     .iter()
                     .all(|input| input.error.is_none())
             );
-            assert_eq!(gpus[index].utilization_percent, Some(37.5));
-            assert_eq!(gpus[index].shared_system_memory, systems[index].memory);
-            assert!(gpus[index].dedicated_memory_used_bytes.is_none());
+            let system_gpu = systems[index].gpu.as_ref().unwrap();
+            assert_eq!(system_gpu.utilization_percent, Some(37.5));
+            assert_eq!(system_gpu.memory_used_bytes, Some(32 * 1024));
+            assert!(system_gpu.memory_total_bytes.is_none());
+            let process_gpu = process.gpu.as_ref().unwrap();
+            assert_eq!(process_gpu.memory_used_bytes, Some(16 * 1024));
+            assert!(process_gpu.utilization_percent.is_none());
+            assert!(
+                process_gpu
+                    .utilization_error
+                    .as_ref()
+                    .unwrap()
+                    .contains("Orin")
+            );
         }
         assert!(
             processes[1..]

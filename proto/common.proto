@@ -1,0 +1,31 @@
+syntax = "proto3";
+package syslens.v1;
+import "google/protobuf/timestamp.proto";
+
+// Preserve field numbers; reserve numbers and names when removing fields.
+message InputStatus {
+  string collector = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  optional string error = 3;
+}
+message Header {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 batch_id = 2;
+  string host = 3;
+  string boot_id = 4;
+  repeated InputStatus inputs = 5;
+}
+// Jetson uses shared RAM. GPU allocation accounting is distinct from system RAM/RSS.
+// Missing measurements are absent, never inferred from another scope or filled with zero.
+message GpuMetrics {
+  optional double utilization_percent = 1;
+  optional uint64 memory_used_bytes = 2;
+  optional uint64 memory_total_bytes = 3;
+  string utilization_source = 4;
+  string memory_source = 5;
+  string memory_scope = 6;
+  google.protobuf.Timestamp utilization_timestamp = 7;
+  google.protobuf.Timestamp memory_timestamp = 8;
+  optional string utilization_error = 9;
+  optional string memory_error = 10;
+}
