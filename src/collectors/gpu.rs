@@ -28,24 +28,31 @@ pub struct JetsonCollector {
     timeout: Duration,
 }
 impl JetsonCollector {
-    pub fn new(
+    /// Verify that a valid GPU observation is available before registering this collector.
+    /// A successfully started tegrastats process is retained for periodic collection.
+    pub fn probe(
         sys_root: &Path,
         load: Option<PathBuf>,
         executable: PathBuf,
         timeout: Duration,
-    ) -> Self {
+    ) -> Result<Self> {
         let load = load.or_else(|| {
             LOAD_PATHS
                 .iter()
                 .map(|path| sys_root.join(path))
                 .find(|path| path.is_file())
         });
-        Self {
+        let mut collector = Self {
             load,
             executable,
             tegrastats: None,
             timeout,
-        }
+        };
+        collector
+            .collect(&CollectContext::now())
+            .context("cannot read a valid Jetson GPU sample")?;
+        // The probe is not published; the first sampling batch reads fresh data.
+        Ok(collector)
     }
 }
 impl Collector for JetsonCollector {
@@ -187,12 +194,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("load");
         fs::write(&path, "425\n").unwrap();
-        let mut collector = JetsonCollector::new(
+        let mut collector = JetsonCollector::probe(
             dir.path(),
             Some(path.clone()),
             "tegrastats".into(),
             Duration::from_secs(1),
-        );
+        )
+        .unwrap();
         assert_eq!(
             collector
                 .collect(&CollectContext::now())
@@ -202,5 +210,99 @@ mod tests {
         );
         fs::write(path, "1001").unwrap();
         assert!(collector.collect(&CollectContext::now()).is_err());
+    }
+
+    #[test]
+    fn startup_probe_accepts_idle_gpu_and_does_not_reuse_probe_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LOAD_PATHS[0]);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "0\n").unwrap();
+        let mut collector = JetsonCollector::probe(
+            dir.path(),
+            None,
+            dir.path().join("no-tegrastats"),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        fs::write(&path, "500\n").unwrap();
+        assert_eq!(
+            collector
+                .collect(&CollectContext::now())
+                .unwrap()
+                .utilization_percent,
+            50.0
+        );
+    }
+
+    #[test]
+    fn startup_probe_rejects_missing_or_invalid_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("load");
+        let executable = dir.path().join("no-tegrastats");
+        let timeout = Duration::from_secs(1);
+        // Neither a sysfs node nor tegrastats is available.
+        assert!(JetsonCollector::probe(dir.path(), None, executable.clone(), timeout).is_err());
+        // An explicitly configured but unreadable node is not considered available.
+        assert!(
+            JetsonCollector::probe(dir.path(), Some(path.clone()), executable.clone(), timeout)
+                .is_err()
+        );
+        for contents in ["not-a-number", "NaN", "1001"] {
+            fs::write(&path, contents).unwrap();
+            assert!(
+                JetsonCollector::probe(dir.path(), Some(path.clone()), executable.clone(), timeout)
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn executable_script(path: &Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, contents).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_probe_reuses_tegrastats_for_periodic_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("tegrastats");
+        executable_script(
+            &executable,
+            "#!/bin/sh\nprintf 'started\\n' >> \"$0.starts\"\nwhile :; do\n  printf '%s\\n' 'GR3D_FREQ 42%@[1098,1098]'\n  sleep 0.02\ndone\n",
+        );
+        let mut collector =
+            JetsonCollector::probe(dir.path(), None, executable, Duration::from_secs(2)).unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                collector
+                    .collect(&CollectContext::now())
+                    .unwrap()
+                    .utilization_percent,
+                42.0
+            );
+        }
+        drop(collector);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("tegrastats.starts")).unwrap(),
+            "started\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_probe_times_out_when_tegrastats_produces_no_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("tegrastats");
+        // exec keeps the sleeping process owned by the collector, allowing cleanup on timeout.
+        executable_script(&executable, "#!/bin/sh\nexec sleep 30\n");
+        let result =
+            JetsonCollector::probe(dir.path(), None, executable, Duration::from_millis(50));
+        let error = result
+            .err()
+            .expect("a silent process must fail the startup probe");
+        assert!(format!("{error:#}").contains("no fresh tegrastats sample"));
     }
 }

@@ -96,17 +96,21 @@ pub fn run_config(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         runtime.add_assembler(ProcessAssembler::new(key, thread_key, identity.clone()))?;
     }
     if config.gpu.enabled {
-        let key = Key::<GpuData>::new("gpu");
-        runtime.add_collector(
-            key,
-            JetsonCollector::new(
-                &config.gpu.sys_root,
-                config.gpu.load_path,
-                config.gpu.tegrastats,
-                Duration::from_millis(config.gpu.timeout_ms),
-            ),
-        )?;
-        runtime.add_assembler(GpuAssembler::new(key, memory, identity))?;
+        match JetsonCollector::probe(
+            &config.gpu.sys_root,
+            config.gpu.load_path,
+            config.gpu.tegrastats,
+            Duration::from_millis(config.gpu.timeout_ms),
+        ) {
+            Ok(collector) => {
+                let key = Key::<GpuData>::new("gpu");
+                runtime.add_collector(key, collector)?;
+                runtime.add_assembler(GpuAssembler::new(key, memory, identity))?;
+            }
+            Err(error) => {
+                eprintln!("Jetson GPU disabled for this run (startup probe failed): {error:#}");
+            }
+        }
     }
     runtime.run(
         Duration::from_millis(config.interval_ms),
@@ -120,6 +124,55 @@ mod tests {
     use super::*;
     use crate::protocol::pb;
     use prost::Message;
+
+    #[test]
+    fn unavailable_gpu_is_probed_once_and_does_not_block_other_messages() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for enabled in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("tegrastats");
+            // The executable exists but never reports valid GPU data.
+            fs::write(&executable, "#!/bin/sh\nprintf 'started\\n' >> \"$0.starts\"\nwhile :; do\n  printf '%s\\n' 'GR3D_FREQ @[1098,1098]'\n  sleep 0.02\ndone\n").unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let mut config = Config {
+                samples: Some(3),
+                interval_ms: 10,
+                ..Default::default()
+            };
+            config.foxglove.enabled = false;
+            config.recording.directory = directory.path().join("recordings");
+            config.processes.pids = vec![std::process::id()];
+            config.gpu.enabled = enabled;
+            config.gpu.sys_root = directory.path().join("no-sysfs");
+            config.gpu.tegrastats = executable;
+            config.gpu.timeout_ms = 1000;
+
+            run_config(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let starts = directory.path().join("tegrastats.starts");
+            if enabled {
+                assert_eq!(fs::read_to_string(starts).unwrap(), "started\n");
+            } else {
+                assert!(!starts.exists(), "disabled GPU must not be probed");
+            }
+            let file = fs::read_dir(directory.path().join("recordings"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let bytes = fs::read(file).unwrap();
+            let mut counts = std::collections::HashMap::new();
+            for message in mcap::MessageStream::new(&bytes).unwrap() {
+                let message = message.unwrap();
+                *counts.entry(message.channel.topic.clone()).or_insert(0) += 1;
+            }
+            assert_eq!(counts.len(), 2);
+            assert_eq!(counts["/syslens/system"], 3);
+            assert_eq!(counts["/syslens/processes"], 3);
+            assert!(!counts.contains_key("/syslens/gpu"));
+        }
+    }
 
     #[test]
     fn real_linux_processes_and_fixture_jetson_reach_finalized_mcap() {

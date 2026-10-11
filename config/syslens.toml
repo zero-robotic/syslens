@@ -12,6 +12,7 @@ pids = []
 names = []
 
 [gpu]
+# When enabled, probe once at startup. If unavailable, disable GPU for this run.
 enabled = true
 sys_root = "/sys"
 # NVIDIA Jetson: automatically find the GPU load sysfs node, otherwise use tegrastats.

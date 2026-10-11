@@ -71,7 +71,9 @@ Jetson 集成 GPU 与 CPU 共享物理 RAM，因此 `shared_system_memory.used_b
 
 GPU 节点随平台与 JetPack 版本变化，可通过 `gpu.load_path` 显式指定。未找到节点时，需让 `tegrastats` 在 PATH 内或配置其完整路径。解析支持单频率和 Orin/Thor 多 GPC 频率数组；只有频率、没有百分比的输出视为采集失败。[tegrastats 格式说明](https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html)
 
-tegrastats 每 100 ms 输出一次，采集时丢弃缓存并等待新行，默认超时 1500 ms；退出时只终止本程序创建的子进程。找到了 sysfs 节点但无法读取时会报告错误，可修正路径或权限。GPU 失败不会停止 CPU、内存等采集。
+启用 GPU 时，启动阶段先实际读取并解析一次数据：sysfs 节点必须可读且数值有效，或 tegrastats 在 `gpu.timeout_ms` 内输出有效的 GR3D 利用率；0% 也是有效数据。探测失败只提示一次原因，本次运行不注册 GPU 采集器及组装器、不发送 `/syslens/gpu`，之后的采样周期不再探测。其他指标照常采集；修复驱动、路径或权限后，重新启动程序才会再次探测。`--no-gpu` 或 `gpu.enabled = false` 会直接跳过探测。
+
+探测成功后才进入 GPU 周期采集，首个采样批次重新读取新数据。tegrastats 每 100 ms 输出一次，采集时丢弃缓存并等待新行，默认超时 1500 ms；探测启动的子进程会继续用于采集，退出时只终止本程序创建的子进程。运行中的读取错误仍按原有规则记录，tegrastats 出错后允许下轮重启；这与启动探测失败后整次运行禁用 GPU 的处理不同。
 
 CPU 利用率第一条样本、首次出现的进程/线程/逻辑核以及计数器重置后没有有效差分，字段保持缺失。进程与线程标识包含系统 boot ID、PID/TID 和启动 tick；退出、PID 复用、核上下线不会沿用旧实体的基线。无法读取的进程会跳过并计数，线程不完整情况写入 `threads_error`。
 
@@ -145,6 +147,6 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-测试覆盖计数器差分、核上下线、PID 复用、Jetson 输出解析、组装与采集失败、有界队列与关闭、MCAP 分段及 Schema、真实 Linux 进程/线程到 MCAP，以及真实 WebSocket 订阅后的 Protobuf 和时间戳验证。
+测试覆盖计数器差分、核上下线、PID 复用、Jetson 输出解析与启动探测（失败不再重试、超时、子进程复用）、组装与采集失败、有界队列与关闭、MCAP 分段及 Schema、真实 Linux 进程/线程到 MCAP，以及真实 WebSocket 订阅后的 Protobuf 和时间戳验证。
 
 开发验证环境为 ARM64 Linux 容器。GPU 测试使用 sysfs/tegrastats 格式样本，尚未在实体 Jetson 上验证驱动节点与权限。
