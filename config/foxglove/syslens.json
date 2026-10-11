@@ -1,0 +1,721 @@
+{
+  "configById": {
+    "Plot!syslens-cpu": {
+      "foxglovePanelTitle": "系统 CPU 利用率",
+      "paths": [
+        {
+          "value": "/syslens/system.cpu.usage_percent",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "总 CPU",
+          "id": "cpu-0",
+          "color": "#249EFF"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
+      "minYValue": 0,
+      "maxYValue": 100
+    },
+    "Plot!syslens-cores": {
+      "foxglovePanelTitle": "各逻辑核 CPU 利用率",
+      "paths": [
+        {
+          "value": "/syslens/system.cpu.cores[:]{usage_percent>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "逻辑核",
+          "dynamicLabelField": "core_id",
+          "dynamicValueField": "usage_percent",
+          "id": "cores-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
+      "minYValue": 0,
+      "maxYValue": 100
+    },
+    "Plot!syslens-memory": {
+      "foxglovePanelTitle": "系统内存",
+      "paths": [
+        {
+          "value": "/syslens/system.memory.total_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "总量",
+          "id": "memory-0",
+          "color": "#249EFF"
+        },
+        {
+          "value": "/syslens/system.memory.used_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "已用",
+          "id": "memory-1",
+          "color": "#00B894"
+        },
+        {
+          "value": "/syslens/system.memory.available_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "可用",
+          "id": "memory-2",
+          "color": "#FFAD33"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-swap": {
+      "foxglovePanelTitle": "系统 Swap",
+      "paths": [
+        {
+          "value": "/syslens/system.memory.swap_total_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "总量",
+          "id": "swap-0",
+          "color": "#249EFF"
+        },
+        {
+          "value": "/syslens/system.memory.swap_used_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "已用",
+          "id": "swap-1",
+          "color": "#00B894"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-gpu": {
+      "foxglovePanelTitle": "系统 GPU 利用率",
+      "paths": [
+        {
+          "value": "/syslens/system.gpu.utilization_percent",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "GPU",
+          "id": "gpu-0",
+          "color": "#249EFF"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
+      "minYValue": 0,
+      "maxYValue": 100
+    },
+    "Plot!syslens-gpu-memory": {
+      "foxglovePanelTitle": "系统 GPU 内存（驱动统计）",
+      "paths": [
+        {
+          "value": "/syslens/system.gpu.memory_used_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "已用",
+          "id": "gpu-memory-0",
+          "color": "#249EFF"
+        },
+        {
+          "value": "/syslens/system.gpu.memory_total_bytes.@div(1048576)",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "总量（接口支持时）",
+          "id": "gpu-memory-1",
+          "color": "#00B894"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-process-cpu": {
+      "foxglovePanelTitle": "各进程 CPU（单核满载为 100%）",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.cpu[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各进程 CPU（单核满载为 100%）",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "process-cpu-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
+      "minYValue": 0
+    },
+    "Plot!syslens-process-rss": {
+      "foxglovePanelTitle": "各进程 RSS",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.rss_mib[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各进程 RSS",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "process-rss-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-process-virtual": {
+      "foxglovePanelTitle": "各进程虚拟内存",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.virtual_mib[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各进程虚拟内存",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "process-virtual-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-skipped": {
+      "foxglovePanelTitle": "进程扫描跳过数",
+      "paths": [
+        {
+          "value": "/syslens/processes.skipped_processes",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "跳过进程（CPU 来源）",
+          "id": "skipped-0",
+          "color": "#249EFF"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "个",
+      "minYValue": 0
+    },
+    "Plot!syslens-threads": {
+      "foxglovePanelTitle": "各线程 CPU（pid / tid 可筛选）",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.thread_cpu[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各线程 CPU（pid / tid 可筛选）",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "threads-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
+      "minYValue": 0
+    },
+    "Plot!syslens-process-gpu": {
+      "foxglovePanelTitle": "各进程 GPU 利用率",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.gpu_utilization[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各进程 GPU 利用率",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "process-gpu-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "%",
+      "minYValue": 0,
+      "maxYValue": 100
+    },
+    "Plot!syslens-process-gpu-memory": {
+      "foxglovePanelTitle": "各进程 GPU 内存（驱动统计）",
+      "paths": [
+        {
+          "value": "/foxglove_script/syslens/process_curves.gpu_memory_mib[:]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "各进程 GPU 内存（驱动统计）",
+          "dynamicLabelField": "label",
+          "dynamicValueField": "value",
+          "id": "process-gpu-memory-0"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "MiB",
+      "minYValue": 0
+    },
+    "Plot!syslens-actual_interval_ms": {
+      "foxglovePanelTitle": "实际采集间隔",
+      "paths": [
+        {
+          "value": "/syslens/system.header.inputs[:]{actual_interval_ms>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "系统消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "actual_interval_ms",
+          "id": "actual_interval_ms-0"
+        },
+        {
+          "value": "/syslens/processes.header.inputs[:]{actual_interval_ms>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "进程消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "actual_interval_ms",
+          "id": "actual_interval_ms-1"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "ms",
+      "minYValue": 0
+    },
+    "Plot!syslens-collection_duration_ms": {
+      "foxglovePanelTitle": "单次采集耗时",
+      "paths": [
+        {
+          "value": "/syslens/system.header.inputs[:]{collection_duration_ms>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "系统消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "collection_duration_ms",
+          "id": "collection_duration_ms-0"
+        },
+        {
+          "value": "/syslens/processes.header.inputs[:]{collection_duration_ms>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "进程消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "collection_duration_ms",
+          "id": "collection_duration_ms-1"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "ms",
+      "minYValue": 0
+    },
+    "Plot!syslens-age_ms": {
+      "foxglovePanelTitle": "输入年龄（相对触发观测）",
+      "paths": [
+        {
+          "value": "/syslens/system.header.inputs[:]{age_ms>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "系统消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "age_ms",
+          "id": "age_ms-0"
+        },
+        {
+          "value": "/syslens/processes.header.inputs[:]{age_ms>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "进程消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "age_ms",
+          "id": "age_ms-1"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "ms",
+      "minYValue": 0
+    },
+    "Plot!syslens-missed_periods": {
+      "foxglovePanelTitle": "累计错过的调度周期",
+      "paths": [
+        {
+          "value": "/syslens/system.header.inputs[:]{missed_periods>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "系统消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "missed_periods",
+          "id": "missed_periods-0"
+        },
+        {
+          "value": "/syslens/processes.header.inputs[:]{missed_periods>=0}",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "showLine": true,
+          "lineSize": 1.5,
+          "label": "进程消息输入",
+          "dynamicLabelField": "collector",
+          "dynamicValueField": "missed_periods",
+          "id": "missed_periods-1"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60,
+      "playbackBarPosition": "right",
+      "isSynced": true,
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "legendDisplay": "left",
+      "sidebarDimension": 220,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showYAxisGridLines": true,
+      "yAxisLabel": "次",
+      "minYValue": 0
+    },
+    "RawMessages!syslens-system": {
+      "topicPath": "/syslens/system",
+      "foxglovePanelTitle": "系统原始消息 / GPU 来源与缺失原因"
+    },
+    "RawMessages!syslens-processes": {
+      "topicPath": "/syslens/processes",
+      "foxglovePanelTitle": "进程原始消息 / 实例 ID 与线程错误"
+    },
+    "Markdown!syslens-help": {
+      "foxglovePanelTitle": "Syslens 使用说明",
+      "markdown": "# Syslens 监控曲线\n\n连接采集主机的 Foxglove WebSocket（默认端口 8765），或打开 Syslens 的 MCAP 文件。布局不会自动连接主机。\n\n- 右侧 Variables / 变量（按 ] 打开）：`pid = 0` 显示全部进程，改成目标 PID 可筛选所有进程和线程曲线。`tid = 0` 显示全部线程，非零时筛选线程。数值请保持为整数。\n- 每条进程 / 线程曲线按完整 instance_id 区分，名称相同或 PID 复用不会混线。\n- 每个动态序列最多显示 100 个实体；大量进程 / 线程时先设置 pid，或在采集端按 PID / 名称筛选。\n- 内存单位为 MiB（1024² 字节）；进程 CPU 可超过 100%。\n- GPU 不支持、CPU 缺少差分基线、输入失败或过期时会缺少曲线；不会将缺失值补成 0。原始消息页可查看 header.inputs 和 GPU error / memory_scope。\n- 默认显示最近 60 秒。回放全程时将 Plot 的 Time window 改为 Automatic。\n- 实时显示会复用尚未过期的指标，且 Foxglove 输出会按 Topic 合并消息；精确分析单一来源的原始观测请使用 MCAP 并按 header.trigger_input 筛选。\n\n需要支持 Plot 动态子序列和布局内 User Scripts 的 Foxglove 客户端；开发核对版本为 3.3.0。\n"
+    },
+    "Tab!syslens": {
+      "activeTabIdx": 0,
+      "tabs": [
+        {
+          "title": "系统 CPU / 内存",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "direction": "row",
+              "first": "Plot!syslens-cpu",
+              "second": "Plot!syslens-cores",
+              "splitPercentage": 50
+            },
+            "second": {
+              "direction": "row",
+              "first": "Plot!syslens-memory",
+              "second": "Plot!syslens-swap",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "系统 GPU",
+          "layout": {
+            "direction": "row",
+            "first": "Plot!syslens-gpu",
+            "second": "Plot!syslens-gpu-memory",
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "进程 CPU / 内存",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "direction": "row",
+              "first": "Plot!syslens-process-cpu",
+              "second": "Plot!syslens-process-rss",
+              "splitPercentage": 50
+            },
+            "second": {
+              "direction": "row",
+              "first": "Plot!syslens-process-virtual",
+              "second": "Plot!syslens-skipped",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "线程 CPU",
+          "layout": "Plot!syslens-threads"
+        },
+        {
+          "title": "进程 GPU",
+          "layout": {
+            "direction": "row",
+            "first": "Plot!syslens-process-gpu",
+            "second": "Plot!syslens-process-gpu-memory",
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "采集状态",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "direction": "row",
+              "first": "Plot!syslens-actual_interval_ms",
+              "second": "Plot!syslens-collection_duration_ms",
+              "splitPercentage": 50
+            },
+            "second": {
+              "direction": "row",
+              "first": "Plot!syslens-age_ms",
+              "second": "Plot!syslens-missed_periods",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "原始消息",
+          "layout": {
+            "direction": "row",
+            "first": "RawMessages!syslens-system",
+            "second": "RawMessages!syslens-processes",
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "使用说明",
+          "layout": "Markdown!syslens-help"
+        }
+      ]
+    }
+  },
+  "globalVariables": {
+    "pid": 0,
+    "tid": 0
+  },
+  "userNodes": {
+    "syslens-process-curves": {
+      "name": "Syslens process curves",
+      "sourceCode": "import { Input } from \"./types.ts\";\n\n// Embedded in syslens.json. These derived topics exist only inside Foxglove.\ntype Point = { label: string; value: number };\ntype Curves = {\n  cpu: Point[];\n  rss_mib: Point[];\n  virtual_mib: Point[];\n  gpu_utilization: Point[];\n  gpu_memory_mib: Point[];\n  thread_cpu: Point[];\n};\ntype Variables = { pid?: number; tid?: number };\n\nexport const inputs = [\"/syslens/processes\"];\nexport const output = \"/foxglove_script/syslens/process_curves\";\n\nfunction append(\n  points: Point[],\n  label: string,\n  value: number | bigint | string | null | undefined,\n  scale = 1,\n): void {\n  // Missing measurements must not become false zeroes; a measured zero is valid.\n  if (value == undefined || value === \"\") return;\n  const number = Number(value);\n  if (Number.isFinite(number)) points.push({ label, value: number / scale });\n}\n\nexport default function script(\n  event: Input<\"/syslens/processes\">,\n  variables: Variables,\n): Curves {\n  const result: Curves = {\n    cpu: [], rss_mib: [], virtual_mib: [], gpu_utilization: [],\n    gpu_memory_mib: [], thread_cpu: [],\n  };\n  const pid = Number(variables.pid ?? 0);\n  const tid = Number(variables.tid ?? 0);\n  for (const process of event.message.processes ?? []) {\n    if (pid !== 0 && process.pid !== pid) continue;\n    // Include the boot/start identity: reordered arrays and reused PIDs stay separate.\n    const label = `${process.name} [${process.instance_id}]`;\n    append(result.cpu, label, process.cpu_percent);\n    append(result.rss_mib, label, process.rss_bytes, 1048576);\n    append(result.virtual_mib, label, process.virtual_bytes, 1048576);\n    append(result.gpu_utilization, label, process.gpu?.utilization_percent);\n    append(result.gpu_memory_mib, label, process.gpu?.memory_used_bytes, 1048576);\n    for (const thread of process.threads ?? []) {\n      if (tid !== 0 && thread.tid !== tid) continue;\n      append(result.thread_cpu, `${process.name}/${thread.name} [${thread.instance_id}]`, thread.cpu_percent);\n    }\n  }\n  return result;\n}\n"
+    }
+  },
+  "linkedGlobalVariables": [],
+  "playbackConfig": {
+    "speed": 1,
+    "messageOrder": "receiveTime"
+  },
+  "layout": "Tab!syslens"
+}

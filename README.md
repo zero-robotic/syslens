@@ -55,6 +55,8 @@ PID 和进程名选择器按“或”匹配；名称精确匹配 `/proc/PID/stat
 
 ## Foxglove 实时曲线与回放
 
+预设布局为 [config/foxglove/syslens.json](config/foxglove/syslens.json)，包含系统、各核、进程、线程、GPU 和采集状态曲线。连接数据源后，通过 **Layouts → Import from file…** 导入即可使用；`pid` / `tid` 变量可筛选实体，默认 0 表示全部。完整步骤、指标口径和布局维护方式见 [Foxglove 布局说明](docs/foxglove.md)。
+
 在 Jetson 运行时指定 `--bind 0.0.0.0`，在另一台主机的 Foxglove 中选择 **Open connection → Foxglove WebSocket**，连接 `ws://JETSON_IP:8765`。这是 SDK 提供的服务，需使用兼容当前 Foxglove SDK 的客户端。[连接说明](https://docs.foxglove.dev/docs/getting-started/rust)
 
 添加 Plot 面板，将下列路径作为曲线的 Y 值，X 轴使用消息时间戳：
@@ -115,25 +117,9 @@ CPU 采集器的首次观测、首次出现的进程/线程/逻辑核以及计�
 
 ## 分层与数据流
 
-```text
-Collectors (独立周期、普通 Rust 数据)
-    |
-    v
-有界观测 FIFO (保留每次完成的观测；入队等待有上限)
-    |
-    v
-Runtime (类型注册、依赖校验、更新输入视图、按观测触发)
-    |
-    v
-Assemblers (合并领域数据 -> Protobuf 编码一次)
-    |
-    v
-Dispatcher (非阻塞分发同一份字节)
-    +--> 录制 FIFO ----------------------> MCAP
-    +--> 按 Topic 保留最新待发值、独立限频 -> Foxglove
+完整设计见 [架构文档](docs/architecture.md)，包含模块分层、观测数据流、GPU 能力探测和退出流程的配图。
 
-OperationContext / Task 统一管理取消、截止时间和退出监督
-```
+![观测数据流与线程边界](docs/images/observation-flow.png)
 
 | 模块 | 职责与依赖边界 |
 | --- | --- |

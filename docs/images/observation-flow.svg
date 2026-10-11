@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1190" viewBox="0 0 1440 1190" role="img">
+<title>观测数据流与线程边界</title><desc>每次完成的观测逐条入队 · 只触发相关组装器 · 同一份 Protobuf 字节分发至独立输出</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1440" height="100%" fill="#F5F8FC"/>
+<rect x="48" y="34" width="58" height="44" rx="12" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="77" y="65" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#FFFFFF" text-anchor="middle" font-weight="600"><tspan x="77" dy="0">02</tspan></text>
+<text x="126" y="68" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="32" fill="#19334B" text-anchor="start" font-weight="600"><tspan x="126" dy="0">观测数据流与线程边界</tspan></text>
+<text x="50" y="108" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">每次完成的观测逐条入队 · 只触发相关组装器 · 同一份 Protobuf 字节分发至独立输出</tspan></text>
+<rect x="50" y="150" width="430" height="125" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="172" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="82" y="194" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="82" dy="0">系统采集线程</tspan></text>
+<text x="82" y="230" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">CPU + 各核 100 ms</tspan><tspan x="82" dy="30">内存 200 ms</tspan></text>
+<rect x="505" y="150" width="430" height="125" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="521" y="172" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="537" y="194" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="537" dy="0">进程 / 线程采集线程</tspan></text>
+<text x="537" y="230" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="537" dy="0">进程 CPU 100 ms · 内存 200 ms</tspan><tspan x="537" dy="30">线程 CPU 100 ms</tspan></text>
+<rect x="960" y="150" width="430" height="125" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="976" y="172" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="992" y="194" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="992" dy="0">GPU 采集线程</tspan></text>
+<text x="992" y="230" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="992" dy="0">系统利用率 100 ms · 内存 500 ms</tspan><tspan x="992" dy="30">进程利用率 1000 ms</tspan></text>
+<polyline points="265,275 265,307 720,307" fill="none" stroke="#137D75" stroke-width="2.5" stroke-linejoin="round"  />
+<polyline points="1175,275 1175,307 720,307" fill="none" stroke="#137D75" stroke-width="2.5" stroke-linejoin="round"  />
+<polyline points="720,275 720,340" fill="none" stroke="#137D75" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="390" y="345" width="660" height="115" rx="16" fill="#EAF7F4" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="406" y="367" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="422" y="389" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="422" dy="0">观测 FIFO · 默认 1024 条</tspan></text>
+<text x="422" y="425" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="422" dy="0">满时暂停生产者；入队等待超时后停用来源</tspan></text>
+<rect x="50" y="510" width="1340" height="391" rx="16" fill="#EAF2FD" stroke="#C2D5EE" stroke-width="1.5"/>
+<text x="575" y="546" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="22" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="575" dy="0">Runtime 主循环 · 同步组装、编码、分发</tspan></text>
+<polyline points="720,460 720,487 265,487 265,566" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="75" y="571" width="380" height="142" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="91" y="593" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="107" y="615" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="107" dy="0">更新输入视图</tspan></text>
+<text x="107" y="651" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="107" dy="0">按依赖构造 Batch</tspan><tspan x="107" dy="30">保留触发值，检查其他值年龄</tspan></text>
+<rect x="525" y="571" width="390" height="142" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="541" y="593" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="557" y="615" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="557" dy="0">消息组装</tspan></text>
+<text x="557" y="651" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="557" dy="0">System / Process Assembler</tspan><tspan x="557" dy="30">实体合并，处理缺失与错误</tspan></text>
+<rect x="985" y="571" width="380" height="142" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="1001" y="593" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="1017" y="615" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="1017" dy="0">Protobuf 编码一次</tspan></text>
+<text x="1017" y="651" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="1017" dy="0">protocol::encode</tspan><tspan x="1017" dy="30">Sample：Bytes + descriptor</tspan></text>
+<polyline points="455,642 520,642" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="915,642 980,642" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="1175,713 1175,747 720,747 720,780" fill="none" stroke="#7653AD" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="390" y="785" width="660" height="92" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="406" y="797" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="422" y="819" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="422" dy="0">Dispatcher · Arc&lt;Sample&gt;</tspan></text>
+<text x="422" y="850" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="422" dy="0">每 Topic 分配序号，分别入队，不执行输出 I/O</tspan></text>
+<polyline points="720,877 720,928 350,928 350,965" fill="none" stroke="#9A671C" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="720,928 1090,928 1090,965" fill="none" stroke="#7653AD" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="50" y="970" width="640" height="155" rx="16" fill="#FFF6E7" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="992" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="82" y="1014" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="82" dy="0">MCAP · 独立队列 + 工作线程</tspan></text>
+<text x="82" y="1050" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">All：FIFO 保留所有已接收消息</tspan><tspan x="82" dy="30">默认 128 条；满时停用录制并尝试排空</tspan><tspan x="82" dy="30">Zstd 压缩 · 分段文件 · 完成时写索引</tspan></text>
+<rect x="750" y="970" width="640" height="155" rx="16" fill="#F3EFFA" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="766" y="992" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="782" y="1014" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="782" dy="0">Foxglove · 独立队列 + 工作线程</tspan></text>
+<text x="782" y="1050" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="782" dy="0">Latest：按 Topic 合并待发值</tspan><tspan x="782" dy="30">每 Topic 默认 100 ms 限频，默认队列 128 条</tspan><tspan x="782" dy="30">Foxglove Rust SDK → WebSocket → 曲线</tspan></text>
+<text x="50" y="1162" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">周期为默认值，来源按配置 / 能力启用。队列有限；实时合并不影响录制，过载和失败按各输出策略处理。</tspan></text>
+</svg>

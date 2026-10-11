@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1135" viewBox="0 0 1440 1135" role="img">
+<title>启动与退出生命周期</title><desc>先完成装配再启动采集 · 退出共用默认 5000 ms 预算 · 采集与输出分阶段收尾</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1440" height="100%" fill="#F5F8FC"/>
+<rect x="48" y="34" width="58" height="44" rx="12" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="77" y="65" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#FFFFFF" text-anchor="middle" font-weight="600"><tspan x="77" dy="0">04</tspan></text>
+<text x="126" y="68" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="32" fill="#19334B" text-anchor="start" font-weight="600"><tspan x="126" dy="0">启动与退出生命周期</tspan></text>
+<text x="50" y="108" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">先完成装配再启动采集 · 退出共用默认 5000 ms 预算 · 采集与输出分阶段收尾</tspan></text>
+<text x="50" y="164" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="50" dy="0">启动阶段</tspan></text>
+<rect x="50" y="190" width="290" height="136" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="212" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="82" y="234" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="82" dy="0">配置与身份</tspan></text>
+<text x="82" y="270" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">加载 TOML / CLI</tspan><tspan x="82" dy="30">读取 host / boot ID</tspan></text>
+<rect x="400" y="190" width="290" height="136" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="416" y="212" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="432" y="234" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="432" dy="0">输出与 Runtime</tspan></text>
+<text x="432" y="270" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="432" dy="0">创建输出和观测队列</tspan><tspan x="432" dy="30">注册基础采集器</tspan></text>
+<rect x="750" y="190" width="290" height="136" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="766" y="212" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="782" y="234" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="782" dy="0">GPU 能力探测</tspan></text>
+<text x="782" y="270" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="782" dy="0">受启动预算监督</tspan><tspan x="782" dy="30">注册能力与剩余组件</tspan></text>
+<rect x="1100" y="190" width="290" height="136" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="1116" y="212" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="1132" y="234" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="1132" dy="0">Runtime::run</tspan></text>
+<text x="1132" y="270" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="1132" dy="0">通知采集线程启动</tspan><tspan x="1132" dy="30">接收观测与监督任务</tspan></text>
+<polyline points="340,257 395,257" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="690,257 745,257" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="1040,257 1095,257" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<text x="50" y="365" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">采集线程注册后等待启动通知；GPU 启动探测使用单独的受监督任务。</tspan></text>
+<polyline points="1245,326 1245,413 1020,413" fill="none" stroke="#137D75" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="50" y="398" width="950" height="65" rx="16" fill="#EAF2FD" stroke="#C2D5EE" stroke-width="1.5"/>
+<text x="78" y="440" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="23" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="78" dy="0">退出触发：Ctrl+C / SIGTERM · 运行时长到达 · 致命错误</tspan></text>
+<text x="50" y="526" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="50" dy="0">退出预算（默认值）</tspan></text>
+<text x="50" y="570" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">t = 0 ms</tspan></text>
+<text x="720" y="570" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#526A7D" text-anchor="middle" font-weight="400"><tspan x="720" dy="0">最多 2500 ms</tspan></text>
+<text x="1390" y="570" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#526A7D" text-anchor="end" font-weight="400"><tspan x="1390" dy="0">共同截止时间 5000 ms</tspan></text>
+<rect x="50" y="590" width="660" height="60" rx="9" fill="#CBEAE3" stroke="#CBEAE3" stroke-width="1.5"/>
+<rect x="720" y="590" width="670" height="60" rx="9" fill="#E2D8F3" stroke="#E2D8F3" stroke-width="1.5"/>
+<text x="380" y="629" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="middle" font-weight="600"><tspan x="380" dy="0">取消采集 + 处理已完成观测</tspan></text>
+<text x="1055" y="629" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="middle" font-weight="600"><tspan x="1055" dy="0">输出排空 + 收尾</tspan></text>
+<rect x="50" y="677" width="660" height="170" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="699" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="82" y="721" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="82" dy="0">阶段 A · 最多使用一半预算</tspan></text>
+<text x="82" y="757" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">取消采集，继续消费 FIFO 并组装分发</tspan><tspan x="82" dy="30">断开入口，结束采集任务等待</tspan><tspan x="82" dy="30">未交付 / 未组装观测、未退出任务均报告错误</tspan></text>
+<rect x="730" y="677" width="660" height="170" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="746" y="699" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="762" y="721" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="762" dy="0">阶段 B · 所有输出并行收尾</tspan></text>
+<text x="762" y="757" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="762" dy="0">同时关闭输出入队端，工作线程排空各自队列</tspan><tspan x="762" dy="30">MCAP 写索引 / footer 并同步文件</tspan><tspan x="762" dy="30">Foxglove 解除常规限频，排空并关闭服务</tspan></text>
+<polyline points="710,764 725,764" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<text x="50" y="889" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">阶段 A 提早结束，剩余时间归输出使用；不会为每个输出重新开始一个完整等待预算。</tspan></text>
+<rect x="50" y="935" width="1340" height="133" rx="16" fill="#FFF6E7" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="957" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="82" y="979" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="82" dy="0">监督边界</tspan></text>
+<text x="82" y="1015" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">OperationContext / Task 监督工作任务；超时报告错误，不能强杀不合作线程或内核 I/O。</tspan><tspan x="82" dy="30">组装器在主循环同步执行，应保持有界且无阻塞 I/O；预算不是对任意卡死代码的硬实时保证。</tspan></text>
+<text x="50" y="1107" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">正常收尾才能完成当前 MCAP 分段；超时、强制终止或掉电不保证末尾数据与索引完整。</tspan></text>
+</svg>

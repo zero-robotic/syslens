@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1060" viewBox="0 0 1440 1060" role="img">
+<title>模块分层与依赖</title><desc>单个二进制 crate · 具体组件在 app 装配 · framework 保持通用</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1440" height="100%" fill="#F5F8FC"/>
+<rect x="48" y="34" width="58" height="44" rx="12" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="77" y="65" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#FFFFFF" text-anchor="middle" font-weight="600"><tspan x="77" dy="0">01</tspan></text>
+<text x="126" y="68" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="32" fill="#19334B" text-anchor="start" font-weight="600"><tspan x="126" dy="0">模块分层与依赖</tspan></text>
+<text x="50" y="108" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">单个二进制 crate · 具体组件在 app 装配 · framework 保持通用</tspan></text>
+<rect x="50" y="150" width="400" height="135" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="172" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="82" y="194" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="82" dy="0">配置与入口</tspan></text>
+<text x="82" y="230" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">main.rs / config.rs</tspan><tspan x="82" dy="30">TOML + CLI · 信号与主机身份</tspan></text>
+<rect x="550" y="150" width="840" height="135" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="566" y="172" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="582" y="194" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="582" dy="0">应用装配  app.rs</tspan></text>
+<text x="582" y="230" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="582" dy="0">创建具体采集器、类型化 Key、组装器和输出</tspan><tspan x="582" dy="30">注册 Schedule 与输出策略，最后启动 Runtime</tspan></text>
+<polyline points="450,216 545,216" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="970,285 970,315 270,315 270,370" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<polyline points="970,315 720,315 720,370" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<polyline points="970,315 1170,315 1170,370" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<text x="64" y="348" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#2864B4" text-anchor="start" font-weight="400"><tspan x="64" dy="0">虚线：创建与注册组件</tspan></text>
+<rect x="50" y="375" width="430" height="205" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="397" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="82" y="419" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="82" dy="0">采集层  collectors</tspan></text>
+<text x="82" y="455" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">实现 Collector&lt;Data = T&gt;</tspan><tspan x="82" dy="30">读取 /proc、sysfs、驱动命令</tspan><tspan x="82" dy="30">维护差分基线与来源能力</tspan><tspan x="82" dy="30">输出普通 Rust 领域数据</tspan></text>
+<rect x="505" y="375" width="430" height="205" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="521" y="397" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="537" y="419" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="537" dy="0">组装层  assemblers</tspan></text>
+<text x="537" y="455" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="537" dy="0">实现 Assembler</tspan><tspan x="537" dy="30">声明依赖，读取 Batch</tspan><tspan x="537" dy="30">合并进程 / 线程实例与指标</tspan><tspan x="537" dy="30">调用 protocol 编码消息</tspan></text>
+<rect x="960" y="375" width="430" height="205" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="976" y="397" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="992" y="419" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="992" dy="0">输出层  outputs</tspan></text>
+<text x="992" y="455" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="992" dy="0">实现 Output</tspan><tspan x="992" dy="30">MCAP：压缩、分段、收尾</tspan><tspan x="992" dy="30">Foxglove：SDK 实时发送</tspan><tspan x="992" dy="30">接收已编码 Sample</tspan></text>
+<polyline points="265,580 265,652" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="720,580 720,652" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="1175,580 1175,652" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<text x="280" y="622" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="280" dy="0">依赖通用接口</tspan></text>
+<rect x="50" y="657" width="1340" height="165" rx="16" fill="#EAF2FD" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="679" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="82" y="701" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="82" dy="0">框架层  framework</tspan></text>
+<text x="82" y="737" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">Collector / Assembler / Output · Key&lt;T&gt; / Batch / Sample</tspan><tspan x="82" dy="30">Runtime：独立调度与观测触发    Dispatcher：有界队列与输出隔离</tspan><tspan x="82" dy="30">OperationContext / Task：取消、截止时间、任务监督；不认识具体指标或 Protobuf</tspan></text>
+<rect x="50" y="858" width="640" height="130" rx="16" fill="#EAF7F4" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="880" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="82" y="902" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="82" dy="0">领域数据  data</tspan></text>
+<text x="82" y="938" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">普通 Rust 类型，供 collectors / assemblers 引用</tspan><tspan x="82" dy="30">数据结构独立于序列化和输出</tspan></text>
+<rect x="720" y="858" width="670" height="130" rx="16" fill="#F3EFFA" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="736" y="880" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="752" y="902" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="752" dy="0">协议  protocol / proto</tspan></text>
+<text x="752" y="938" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="752" dy="0">组装器通过此模块构造 Protobuf，编码一次</tspan><tspan x="752" dy="30">build.rs 生成类型和完整 descriptor</tspan></text>
+<text x="50" y="1032" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">实线：主要接口依赖；底部列出共享数据 / 协议模块。运行时数据流及线程边界见图 02。</tspan></text>
+</svg>

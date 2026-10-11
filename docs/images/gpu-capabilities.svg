@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1180" viewBox="0 0 1440 1180" role="img">
+<title>Jetson GPU 能力探测</title><desc>面向 Orin / Thor 按可用接口选源 · 启动时分项判断能力 · 当前 nvidia-smi 使用 GPU index 0</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1440" height="100%" fill="#F5F8FC"/>
+<rect x="48" y="34" width="58" height="44" rx="12" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="77" y="65" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#FFFFFF" text-anchor="middle" font-weight="600"><tspan x="77" dy="0">03</tspan></text>
+<text x="126" y="68" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="32" fill="#19334B" text-anchor="start" font-weight="600"><tspan x="126" dy="0">Jetson GPU 能力探测</tspan></text>
+<text x="50" y="108" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">面向 Orin / Thor 按可用接口选源 · 启动时分项判断能力 · 当前 nvidia-smi 使用 GPU index 0</tspan></text>
+<rect x="50" y="150" width="1340" height="115" rx="16" fill="#EAF2FD" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="172" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
+<text x="82" y="194" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="82" dy="0">GpuSources::probe · 受监督的启动探测</tspan></text>
+<text x="82" y="230" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="20" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">默认总预算 15000 ms；分项独立判断，探测过程顺序执行；关闭 GPU 时跳过全部探测</tspan></text>
+<polyline points="720,265 720,290 265,290 265,322" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<polyline points="720,265 720,290 720,290 720,322" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<polyline points="720,265 720,290 1175,290 1175,322" fill="none" stroke="#2864B4" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<rect x="50" y="327" width="430" height="482" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<text x="74" y="366" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="74" dy="0">系统 GPU 利用率</tspan></text>
+<rect x="505" y="327" width="430" height="482" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<text x="529" y="366" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="529" dy="0">系统 / 进程 GPU 内存</tspan></text>
+<rect x="960" y="327" width="430" height="482" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<text x="984" y="366" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="984" dy="0">进程 GPU 利用率</tspan></text>
+<rect x="70" y="393" width="390" height="85" rx="16" fill="#EAF7F4" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="86" y="405" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="102" y="427" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="102" dy="0">1  sysfs load</tspan></text>
+<text x="102" y="458" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="102" dy="0">显式路径或已知节点</tspan></text>
+<polyline points="265,478 265,516" fill="none" stroke="#137D75" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<text x="281" y="505" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="16" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="281" dy="0">不可用</tspan></text>
+<rect x="70" y="521" width="390" height="85" rx="16" fill="#EAF7F4" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="86" y="533" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="102" y="555" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="102" dy="0">2  tegrastats</tspan></text>
+<text x="102" y="586" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="102" dy="0">持续子进程，解析 GR3D 百分比</tspan></text>
+<polyline points="265,606 265,644" fill="none" stroke="#137D75" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<text x="281" y="633" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="16" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="281" dy="0">不可用</tspan></text>
+<rect x="70" y="649" width="390" height="85" rx="16" fill="#EAF7F4" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="86" y="661" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="102" y="683" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="102" dy="0">3  nvidia-smi</tspan></text>
+<text x="102" y="714" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="102" dy="0">查询系统 GPU 利用率</tspan></text>
+<text x="75" y="776" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="75" dy="0">选择首个有效来源</tspan></text>
+<rect x="525" y="393" width="390" height="100" rx="16" fill="#FFF6E7" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="541" y="405" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="557" y="427" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="557" dy="0">1  nvmap clients</tspan></text>
+<text x="557" y="458" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="557" dy="0">内核 total + PID 分配统计</tspan><tspan x="557" dy="30">保留 nvmap 统计口径</tspan></text>
+<polyline points="720,493 720,531" fill="none" stroke="#9A671C" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<text x="736" y="520" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="16" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="736" dy="0">不可用</tspan></text>
+<rect x="525" y="536" width="390" height="185" rx="16" fill="#FFF6E7" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="541" y="558" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="557" y="580" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="557" dy="0">2  nvidia-smi</tspan></text>
+<text x="557" y="616" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="557" dy="0">系统 memory.used / total</tspan><tspan x="557" dy="30">进程 compute-apps.used_memory</tspan><tspan x="557" dy="30">两项分别判断，任一有效可启用</tspan><tspan x="557" dy="30">不以系统查询成功作为前提</tspan></text>
+<text x="530" y="758" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#9A671C" text-anchor="start" font-weight="400"><tspan x="530" dy="0">未支持的子项保留错误原因</tspan></text>
+<text x="530" y="788" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="530" dy="0">进程子项仅在进程采集开启时探测</tspan></text>
+<rect x="980" y="393" width="390" height="120" rx="16" fill="#F3EFFA" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="996" y="415" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="1012" y="437" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="1012" dy="0">nvidia-smi pmon</tspan></text>
+<text x="1012" y="473" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="1012" dy="0">进程采集开启时独立探测</tspan><tspan x="1012" dy="30">SM 利用率，周期至少 1000 ms</tspan></text>
+<polyline points="1175,513 1175,551" fill="none" stroke="#7653AD" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="980" y="556" width="390" height="152" rx="16" fill="#F3EFFA" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="996" y="578" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="1012" y="600" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="1012" dy="0">有效性与进程身份</tspan></text>
+<text x="1012" y="636" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="1012" dy="0">拒绝不支持或全 N/A 的活动记录</tspan><tspan x="1012" dy="30">空进程表允许后续继续采集</tspan><tspan x="1012" dy="30">运行期核对 PID + start_ticks</tspan></text>
+<text x="985" y="758" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#7653AD" text-anchor="start" font-weight="400"><tspan x="985" dy="0">独立于 nvmap 和系统查询结果</tspan></text>
+<text x="985" y="788" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="985" dy="0">接口支持范围取决于驱动 / BSP</tspan></text>
+<polyline points="265,809 265,841" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="720,809 720,841" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<polyline points="1175,809 1175,841" fill="none" stroke="#526A7D" stroke-width="2.5" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<rect x="50" y="846" width="430" height="97" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="858" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="82" y="880" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="82" dy="0">类型化能力结果</tspan></text>
+<text x="82" y="911" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">Capability&lt;GpuData&gt;</tspan></text>
+<rect x="505" y="846" width="430" height="97" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="521" y="858" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="537" y="880" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="537" dy="0">类型化能力结果</tspan></text>
+<text x="537" y="911" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="537" dy="0">Capability&lt;GpuMemoryData&gt;</tspan></text>
+<rect x="960" y="846" width="430" height="97" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="976" y="858" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
+<text x="992" y="880" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="992" dy="0">类型化能力结果</tspan></text>
+<text x="992" y="911" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="992" dy="0">Capability&lt;ProcessGpuUtilizationData&gt;</tspan></text>
+<rect x="50" y="984" width="650" height="135" rx="16" fill="#EAF7F4" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="66" y="1006" width="5" height="29" rx="2" fill="#137D75" stroke="#137D75" stroke-width="1.5"/>
+<text x="82" y="1028" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#137D75" text-anchor="start" font-weight="600"><tspan x="82" dy="0">成功：注册采集器</tspan></text>
+<text x="82" y="1064" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="82" dy="0">按各自周期读取新观测；探测数据不发布</tspan><tspan x="82" dy="30">普通读取错误可在下一周期重试</tspan></text>
+<rect x="730" y="984" width="660" height="135" rx="16" fill="#FFF6E7" stroke="#CFDAE5" stroke-width="1.5"/>
+<rect x="746" y="1006" width="5" height="29" rx="2" fill="#9A671C" stroke="#9A671C" stroke-width="1.5"/>
+<text x="762" y="1028" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#9A671C" text-anchor="start" font-weight="600"><tspan x="762" dy="0">失败：注册不可用输入</tspan></text>
+<text x="762" y="1064" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="19" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="762" dy="0">不创建采集线程，本次运行不重复探测</tspan><tspan x="762" dy="30">其他能力继续工作；修复后需重启</tspan></text>
+<text x="50" y="1152" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="17" fill="#526A7D" text-anchor="start" font-weight="400"><tspan x="50" dy="0">GPU 共享系统 RAM；驱动分配统计不等同于 GPU 独占物理显存。图示为实现逻辑，实体 Orin / Thor 仍需验证。</tspan></text>
+</svg>
