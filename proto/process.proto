@@ -25,6 +25,10 @@ message Process {
   repeated Thread threads = 9;
   optional string threads_error = 10;
   GpuMetrics gpu = 11;
+  // /proc/PID/cmdline arguments joined with spaces; refreshed with process memory.
+  // Empty is valid (e.g. kernel threads); absent means unavailable or old schema.
+  optional string command_line = 12;
+  optional string command_line_error = 13;
 }
 message ProcessSample {
   Header header = 1;

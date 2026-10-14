@@ -106,7 +106,7 @@ diagnostics = []
 for field, title, unit in (
     ("actual_interval_ms", "实际采集间隔", "ms"),
     ("collection_duration_ms", "单次采集耗时", "ms"),
-    ("age_ms", "输入年龄（相对触发观测）", "ms"),
+    ("age_ms", "距采集完成时长（ms）", "ms"),
     ("missed_periods", "累计错过的调度周期", "次"),
 ):
     diagnostics.append(plot(field, title, [
@@ -123,10 +123,33 @@ panels["Markdown!syslens-help"] = {
     "markdown": "# Syslens 监控曲线\n\n连接采集主机的 Foxglove WebSocket（默认端口 8765），或打开 Syslens 的 MCAP 文件。布局不会自动连接主机。\n\n- 右侧 Variables / 变量（按 ] 打开）：`pid = 0` 显示全部进程，改成目标 PID 可筛选所有进程和线程曲线。`tid = 0` 显示全部线程，非零时筛选线程。数值请保持为整数。\n- 所有图表默认隐藏图例列表。点击各图工具栏的 Toggle legend / 切换图例，或在齿轮设置的 Legend → Show legend 中单独开启或关闭。\n- 每条进程 / 线程曲线按完整 instance_id 区分，名称相同或 PID 复用不会混线。\n- 每个动态序列最多显示 100 个实体；大量进程 / 线程时先设置 pid，或在采集端按 PID / 名称筛选。\n- 内存单位为 MiB（1024² 字节）；进程 CPU 可超过 100%。\n- GPU 不支持、CPU 缺少差分基线、输入失败或过期时会缺少曲线；不会将缺失值补成 0。原始消息页可查看 header.inputs 和 GPU error / memory_scope。\n- 默认显示最近 60 秒。回放全程时将 Plot 的 Time window 改为 Automatic。\n- 实时显示会复用尚未过期的指标，且 Foxglove 输出会按 Topic 合并消息；精确分析单一来源的原始观测请使用 MCAP 并按 header.trigger_input 筛选。\n\n需要支持 Plot 动态子序列和布局内 User Scripts 的 Foxglove 客户端；开发核对版本为 3.3.0。\n",
 }
 tab("使用说明", ["Markdown!syslens-help"])
+panels["Markdown!syslens-help"]["markdown"] += """
+## 进程过滤条件
+
+右侧 Variables / 变量中的条件可同时使用：
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `command_contains` | 空字符串 | 命令行包含指定文本，区分大小写；如 `python3` 或 `--mode test`。与 pid 共同筛选进程及其线程。 |
+| `cpu_min_percent` | 0 | 进程 CPU 下限，单位 %；例如 5 表示 ≥ 5%。 |
+| `rss_min_mib` | 0 | 进程 RSS 下限，单位 MiB；例如 100 表示 ≥ 100 MiB。 |
+| `virtual_min_mib` | 0 | 进程虚拟内存下限，单位 MiB。 |
+| `gpu_min_percent` | 0 | 进程 GPU 利用率下限，单位 %。 |
+| `gpu_memory_min_mib` | 0 | 进程 GPU 内存下限，单位 MiB。 |
+| `thread_cpu_min_percent` | 0 | 线程 CPU 下限，单位 %。 |
+
+每个下限只影响对应图表，按每条消息的当前值判断，低于下限的点不输出；不是按历史峰值选中整条曲线。下限为 0 时保留有效零值，负数或非有限下限按 0 处理。扫描跳过数是整体统计，不参与筛选。
+
+筛选仅影响客户端曲线，MCAP 保留全部采集结果。命令行来自 /proc/PID/cmdline，随进程内存一起刷新（默认 200 ms）。空关键词关闭命令行筛选；启用时，空命令行、读取失败及旧录制中没有该字段的进程不匹配。原始消息中的 command_line_error 可查看读取失败原因。
+"""
 panels["Tab!syslens"] = {"activeTabIdx": 0, "tabs": tabs}
 layout = {
     "configById": panels,
-    "globalVariables": {"pid": 0, "tid": 0},
+    "globalVariables": {
+        "pid": 0, "tid": 0, "command_contains": "",
+        "cpu_min_percent": 0, "rss_min_mib": 0, "virtual_min_mib": 0,
+        "gpu_min_percent": 0, "gpu_memory_min_mib": 0, "thread_cpu_min_percent": 0,
+    },
     "userNodes": {
         "syslens-process-curves": {
             "name": "Syslens process curves",

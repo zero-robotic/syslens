@@ -31,7 +31,7 @@
 <rect x="75" y="571" width="380" height="142" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
 <rect x="91" y="593" width="5" height="29" rx="2" fill="#2864B4" stroke="#2864B4" stroke-width="1.5"/>
 <text x="107" y="615" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#2864B4" text-anchor="start" font-weight="600"><tspan x="107" dy="0">更新输入视图</tspan></text>
-<text x="107" y="651" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="107" dy="0">按依赖构造 Batch</tspan><tspan x="107" dy="30">保留触发值，检查其他值年龄</tspan></text>
+<text x="107" y="651" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="18" fill="#19334B" text-anchor="start" font-weight="400"><tspan x="107" dy="0">按依赖构造 Batch</tspan><tspan x="107" dy="30">保留触发值，检查其他值是否过期</tspan></text>
 <rect x="525" y="571" width="390" height="142" rx="16" fill="#FFFFFF" stroke="#CFDAE5" stroke-width="1.5"/>
 <rect x="541" y="593" width="5" height="29" rx="2" fill="#7653AD" stroke="#7653AD" stroke-width="1.5"/>
 <text x="557" y="615" font-family="Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="24" fill="#7653AD" text-anchor="start" font-weight="600"><tspan x="557" dy="0">消息组装</tspan></text>

@@ -291,6 +291,8 @@ impl Assembler for ProcessAssembler {
                 cpu_time_ticks: cpu.map(|row| row.cpu_ticks),
                 rss_bytes: mem.map(|row| row.rss_bytes),
                 virtual_bytes: mem.map(|row| row.virtual_bytes),
+                command_line: mem.and_then(|row| row.command_line.clone()),
+                command_line_error: mem.and_then(|row| row.command_line_error.clone()),
                 threads: group
                     .into_iter()
                     .flat_map(|group| &group.items)
@@ -365,6 +367,8 @@ mod tests {
                         name: "memory-only".into(),
                         rss_bytes: 2048,
                         virtual_bytes: 4096,
+                        command_line: Some("memory-only --mode test".into()),
+                        command_line_error: None,
                     },
                 )]
                 .into(),
@@ -406,6 +410,10 @@ mod tests {
         assert_eq!(message.processes.len(), 3);
         assert_eq!(message.processes[0].rss_bytes, Some(2048));
         assert_eq!(message.processes[0].name, "memory-only");
+        assert_eq!(
+            message.processes[0].command_line.as_deref(),
+            Some("memory-only --mode test")
+        );
         assert!(
             message
                 .processes
@@ -438,6 +446,8 @@ mod tests {
             .find(|row| row.start_ticks == 100)
             .unwrap();
         assert!(reused.rss_bytes.is_none());
+        assert!(reused.command_line.is_none());
+        assert!(reused.command_line_error.is_none());
         assert!(reused.threads.is_empty());
         assert_eq!(reused.instance_id, "boot:42:100");
     }

@@ -392,8 +392,16 @@ mod tests {
                         .as_ref()
                         .is_some_and(|gpu| gpu.memory_used_bytes == Some(16 * 1024)))
         );
+        let expected_command_line = std::env::args().collect::<Vec<_>>().join(" ");
         for p in processes.iter().flat_map(|sample| &sample.processes) {
             assert_eq!(p.pid, std::process::id());
+            if p.rss_bytes.is_some() {
+                assert_eq!(
+                    p.command_line.as_deref(),
+                    Some(expected_command_line.as_str())
+                );
+                assert!(p.command_line_error.is_none());
+            }
             assert!(
                 p.instance_id
                     .ends_with(&format!(":{}:{}", p.pid, p.start_ticks))

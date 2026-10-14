@@ -25,6 +25,8 @@ pub struct ProcessMemoryData {
     pub name: String,
     pub rss_bytes: u64,
     pub virtual_bytes: u64,
+    pub command_line: Option<String>,
+    pub command_line_error: Option<String>,
 }
 #[derive(Debug, Default)]
 pub struct ProcessMemory {

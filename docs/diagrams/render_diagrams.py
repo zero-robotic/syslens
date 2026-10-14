@@ -116,7 +116,7 @@ def flow():
     d.rect(50, 510, 1340, 391, "#EAF2FD", "#C2D5EE")
     d.text(575, 546, "Runtime 主循环 · 同步组装、编码、分发", 22, BLUE, bold=True)
     d.arrow([(720, 460), (720, 487), (265, 487), (265, 566)], BLUE)
-    d.card(75, 571, 380, 142, "更新输入视图", "按依赖构造 Batch\n保留触发值，检查其他值年龄", BLUE, size=18)
+    d.card(75, 571, 380, 142, "更新输入视图", "按依赖构造 Batch\n保留触发值，检查其他值是否过期", BLUE, size=18)
     d.card(525, 571, 390, 142, "消息组装", "System / Process Assembler\n实体合并，处理缺失与错误", PURPLE, size=18)
     d.card(985, 571, 380, 142, "Protobuf 编码一次", "protocol::encode\nSample：Bytes + descriptor", PURPLE, size=18)
     d.arrow([(455, 642), (520, 642)], BLUE)

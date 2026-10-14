@@ -70,7 +70,7 @@ Dispatcher 不执行文件或网络 I/O，也不等待队列腾出容量；入�
 | `cpu` | `/proc/stat`，一次读取产生总 CPU 与各逻辑核利用率 | 100 ms | SystemSample |
 | `memory` | `/proc/meminfo`，系统内存与 swap | 200 ms | SystemSample |
 | `process_cpu` | `/proc/PID/stat`，进程 CPU tick 差分 | 100 ms | ProcessSample |
-| `process_memory` | `/proc/PID/stat`，RSS 与虚拟内存 | 200 ms | ProcessSample |
+| `process_memory` | `/proc/PID/stat` 与 `/proc/PID/cmdline`，RSS、虚拟内存与命令行 | 200 ms | ProcessSample |
 | `thread_cpu` | `/proc/PID/task/TID/stat`，线程 CPU tick 差分 | 100 ms | ProcessSample |
 | `gpu_utilization` | sysfs、tegrastats 或 nvidia-smi | 100 ms | SystemSample |
 | `gpu_memory` | nvmap 或 nvidia-smi，系统及进程 GPU 内存 | 500 ms | SystemSample、ProcessSample |
@@ -88,7 +88,7 @@ Dispatcher 不执行文件或网络 I/O，也不等待队列腾出容量；入�
 
 每个消息是多个来源的组合视图，不是所有指标同时读取的系统快照。`header.trigger_input` 表明这次更新由谁触发；`header.inputs` 保存各来源自己的时间和状态。并发采集按完成并入队的顺序处理，因此消息的采集时间戳不保证单调递增。
 
-其他输入的有效期为其配置周期乘以 `stale_after_periods`，默认 3。年龄使用“触发观测完成时间减去该输入完成时间”的单调时钟差，负差按零处理；超过有效期时不参与组装。**触发观测本身始终保留**，不会因为等待组装或输出而被当作陈旧数据过滤。
+其他输入的有效期为其配置周期乘以 `stale_after_periods`，默认 3。距采集完成时长使用“触发观测完成时间减去该输入完成时间”的单调时钟差，负差按零处理；超过有效期时不参与组装。**触发观测本身始终保留**，不会因为等待组装或输出而被当作陈旧数据过滤。
 
 例如，线程观测触发进程消息时，可以复用仍有效的进程内存；这并不代表内存又采集了一次。分析某个来源的原始时间序列时，应按 `trigger_input` 筛选或结合来源序号去重。
 
@@ -99,7 +99,7 @@ Dispatcher 不执行文件或网络 I/O，也不等待队列腾出容量；入�
 | `timestamp` | 来源观测的采集开始时间；没有已完成采集时缺失。 |
 | `interval_ms` / `actual_interval_ms` | 配置周期 / 最近两次采集开始的实际间隔。 |
 | `collection_duration_ms` | 最近一次采集耗时。 |
-| `age_ms` / `stale` | 相对触发观测的年龄 / 是否过期。 |
+| `age_ms` / `stale` | 距采集完成时长（以触发观测完成时刻为参照）/ 是否过期。 |
 | `sample_sequence` | 来源采集尝试序号，复用输入保留原序号。 |
 | `missed_periods` | 该采集线程累计跳过的调度时间点。 |
 | `error` | 未就绪、不可用、读取失败、过期或任务停用原因。 |
@@ -113,7 +113,7 @@ Dispatcher 不执行文件或网络 I/O，也不等待队列腾出容量；入�
 | 消息 / Topic | 组合内容 |
 | --- | --- |
 | `SystemSample` / `/syslens/system` | 系统 CPU、各核 CPU、系统内存、系统 GPU 利用率与 GPU 内存。依赖 `cpu`、`memory`，启用 GPU 时增加 `gpu_utilization`、`gpu_memory`。 |
-| `ProcessSample` / `/syslens/processes` | 进程 CPU、RSS、虚拟内存、线程 CPU、进程 GPU 利用率与 GPU 内存。依赖进程 CPU/内存，并按配置增加线程、GPU 内存和进程 GPU 利用率输入。 |
+| `ProcessSample` / `/syslens/processes` | 进程 CPU、RSS、虚拟内存、命令行、线程 CPU、进程 GPU 利用率与 GPU 内存。依赖进程 CPU/内存，并按配置增加线程、GPU 内存和进程 GPU 利用率输入。 |
 
 关闭进程采集后只发布系统消息。旧 `GpuSample` 仅保留 deprecated schema，不再发布。
 

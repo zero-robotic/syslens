@@ -20,6 +20,7 @@ startup_timeout_ms = 15000
 system_cpu_ms = 100
 system_memory_ms = 200
 process_cpu_ms = 100
+# Includes RSS, virtual memory and the current command line from /proc/PID/cmdline.
 process_memory_ms = 200
 thread_cpu_ms = 100
 # Also controls the persistent tegrastats --interval when that source is used.

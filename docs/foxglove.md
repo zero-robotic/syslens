@@ -9,7 +9,7 @@
 3. 从 **Layouts → Import from file…** 导入 `config/foxglove/syslens.json`。各面板根据表达式订阅所需 Topic；无需逐项添加曲线。布局文件不保存或自动建立主机连接。[官方布局导入说明](https://docs.foxglove.dev/docs/visualization/layouts)
 4. 回放时直接打开 Syslens 录制的 `.mcap` 文件，沿用相同布局，不必启动采集程序。
 
-需要支持 Plot 动态子序列及布局内 User Scripts 的 Foxglove 客户端。本布局已在 Foxglove 3.3.0 导入并用本地模拟 MCAP 验证全部曲线页及 PID 筛选；实际 Jetson 实时数据仍需在目标主机连接验证。默认各图同步时间轴，显示最近 60 秒；查看完整回放时，可将 Plot 的 **Time window** 改为 **Automatic**。
+需要支持 Plot 动态子序列及布局内 User Scripts 的 Foxglove 客户端。本布局的基础曲线页及 PID 筛选已在 Foxglove 3.3.0 导入并用本地模拟 MCAP 验证；新增的命令行与数值下限过滤已通过脚本测试，并用 Jetson Orin 实时消息验证。默认各图同步时间轴，显示最近 60 秒；查看完整回放时，可将 Plot 的 **Time window** 改为 **Automatic**。
 
 ## 页面与指标
 
@@ -18,13 +18,15 @@
 | 系统统计数据 | 系统 CPU、每个逻辑核 CPU；内存总量 / 已用 / 可用；Swap 总量 / 已用；GPU 利用率、驱动统计的 GPU 内存已用 / 总量。 |
 | 进程统计数据 | 各进程 CPU、RSS、虚拟内存；进程 CPU 扫描的跳过数；各进程 GPU 利用率与 GPU 内存占用。 |
 | 线程 CPU | 各线程 CPU，区分所属进程和线程实例。 |
-| 采集状态 | 各输入实际采集间隔、采集耗时、输入年龄、累计错过周期。 |
+| 采集状态 | 各输入实际采集间隔、采集耗时、距采集完成时长、累计错过周期。 |
 | 原始消息 | 系统 / 进程原始消息，用于查看来源、错误、instance_id 和 memory_scope。 |
 | 使用说明 | 连接、筛选、单位和缺失值说明。 |
 
 “系统统计数据”采用两列三行布局，依次展示 CPU、内存 / Swap、GPU 的六个图表。
 
-“进程统计数据”同样采用两列三行布局，依次展示 CPU / RSS、虚拟内存 / 扫描跳过数、GPU 利用率 / GPU 内存的六个图表，支持通过 `pid` 筛选进程曲线。
+“进程统计数据”同样采用两列三行布局，依次展示 CPU / RSS、虚拟内存 / 扫描跳过数、GPU 利用率 / GPU 内存的六个图表，支持按 PID、命令行关键词和各图独立的数值下限筛选进程曲线。
+
+“距采集完成时长（ms）”对应 `header.inputs[].age_ms`，表示触发本条消息的观测完成时刻，距离该输入采集完成经过了多久。各指标按不同周期采集，复用已有结果时该值会增加，新结果到来后回落；它用于判断数据是否过期，不表示网络传输延迟。
 
 内存使用 MiB（1 MiB = 1,048,576 字节）。进程 CPU 占满一个逻辑核为 100%，多线程可超过 100%，对应图的纵轴不固定为 100%。GPU 内存沿用驱动统计口径，不能与系统 RAM 或 RSS 直接相加。
 
@@ -38,20 +40,33 @@
 
 ## 进程与线程筛选
 
-在 Foxglove 右侧 **Variables / 变量** 中修改数值（按 `]` 打开右侧栏）：
+在 Foxglove 右侧 **Variables / 变量** 中修改条件（按 `]` 打开右侧栏）：
 
 | 变量 | 默认值 | 行为 |
 | --- | ---: | --- |
 | `pid` | 0 | 显示全部进程；设为具体 PID 后筛选进程 CPU、内存、GPU 和线程曲线。 |
 | `tid` | 0 | 显示全部线程；设为具体 TID 后筛选线程 CPU。建议同时指定所属 PID。 |
+| `command_contains` | 空字符串 | 命令行包含指定文本，区分大小写，例如 `python3`、`--mode test`；空字符串关闭此条件。 |
+| `cpu_min_percent` | 0 | 进程 CPU ≥ 此值（%）。 |
+| `rss_min_mib` | 0 | 进程 RSS ≥ 此值（MiB）。 |
+| `virtual_min_mib` | 0 | 进程虚拟内存 ≥ 此值（MiB）。 |
+| `gpu_min_percent` | 0 | 进程 GPU 利用率 ≥ 此值（%）。 |
+| `gpu_memory_min_mib` | 0 | 进程 GPU 内存 ≥ 此值（MiB）。 |
+| `thread_cpu_min_percent` | 0 | 线程 CPU ≥ 此值（%）。 |
+
+例如设置 `command_contains = python3`、`cpu_min_percent = 5`、`rss_min_mib = 100`：CPU 图只输出命令行含 `python3` 且 CPU ≥ 5% 的点；RSS 图只输出命令行含 `python3` 且 RSS ≥ 100 MiB 的点。这两个数值条件独立生效，CPU 达标不会自动让该进程的 RSS 曲线通过。`pid` 与命令行条件叠加作用于所有进程和线程曲线；`tid` 只影响线程图。扫描跳过数属于整体统计，不参与筛选。
+
+下限按每条消息的当前值判断，低于下限的点不输出，不按历史峰值筛选整条曲线，也不清除时间窗口中已有的历史点。下限为 0 时保留有效零值；负数或非有限下限按 0 处理。
+
+命令行来自 `/proc/PID/cmdline`，参数间以空格连接，随 `process_memory_ms` 刷新（默认 200 ms）；进程名 `name` 仍为 `/proc/PID/stat` 的 comm。命令行未做 shell 引号还原；非 UTF-8 字节使用替代字符。读取失败时保留其他指标，通过 `command_line_error` 记录原因。内核线程的空命令行和旧 MCAP 中缺少命令行字段的进程，在关键词非空时不会匹配；关键词为空时仍正常显示。原始消息页可检查 `command_line` 的具体内容。
 
 筛选只影响客户端曲线，不改变采集范围和 MCAP 内容。若要减少采集开销，在 Syslens 配置中设置 `processes.pids` / `processes.names` 或使用 `--pid`。
 
-逻辑核以 `core_id` 分线；进程和线程以包含 boot ID 与启动 tick 的完整 `instance_id` 分线，并在图例中附带名称，避免数组重排、同名进程、PID / TID 复用导致混线。每个动态父序列最多显示 100 个实体，超过后应按 PID / TID 缩小范围。[官方动态曲线说明](https://docs.foxglove.dev/docs/visualization/panels/plot#dynamic-series)
+逻辑核以 `core_id` 分线；进程和线程以包含 boot ID 与启动 tick 的完整 `instance_id` 分线，并在图例中附带名称，避免数组重排、同名进程、PID / TID 复用导致混线。每个动态父序列最多显示 100 个实体，超过后应按 PID / TID、命令行或数值下限缩小范围。[官方动态曲线说明](https://docs.foxglove.dev/docs/visualization/panels/plot#dynamic-series)
 
 ## 客户端数据转换与时间语义
 
-布局内嵌一个 User Script，将进程消息转换为带 `label` / `value` 的数组，并展开嵌套的 GPU、线程指标。派生 Topic 为 `/foxglove_script/syslens/process_curves`，只存在于 Foxglove 客户端；采集程序仍发送原来的两个 Topic，MCAP 协议不变。该脚本随布局导入，无需安装扩展或另行加载 TypeScript 文件。[官方 User Scripts 说明](https://docs.foxglove.dev/docs/visualization/user-scripts)
+布局内嵌一个 User Script，将进程消息转换为带 `label` / `value` 的数组，并展开嵌套的 GPU、线程指标。派生 Topic 为 `/foxglove_script/syslens/process_curves`，只存在于 Foxglove 客户端；采集程序仍发送原来的两个 Topic，Process 新增可选的命令行字段（编号 12、13），保留原有字段编号。该脚本随布局导入，无需安装扩展或另行加载 TypeScript 文件。[官方 User Scripts 说明](https://docs.foxglove.dev/docs/visualization/user-scripts)
 
 所有曲线使用 `receiveTime`（界面中的 Log time）。Syslens 的 Foxglove 输出向 SDK 提供采集开始时间作为消息 log time，MCAP 也使用相同时间戳。没有使用 ROS 专用的 `header.stamp`；当前消息字段为 `header.timestamp`。
 
@@ -68,3 +83,9 @@ python3 config/foxglove/generate_layout.py
 ```
 
 脚本只依赖 Python 标准库，生成完整的 `syslens.json`。导入时只需要该 JSON 文件；直接在 Foxglove 调整并导出的布局，也可以单独使用。
+
+过滤逻辑和布局内嵌脚本的一致性可用 Node.js 22.18+ 验证：
+
+```sh
+node --test config/foxglove/process_curves.test.mjs
+```
